@@ -142,7 +142,7 @@ func NewStorage(opts generic.RESTOptions, kubeletClientConfig client.KubeletClie
 }
 
 // NewStorage returns a NodeStorage object that will work against nodes.
-func NewStorageForFederation(opts generic.RESTOptions, kubeletClientConfig client.KubeletClientConfig, proxyTransport http.RoundTripper) (*NodeStorage, error) {
+func NewStorageForFederation(opts generic.RESTOptions) (*NodeStorage) {
 	prefix := "/" + opts.ResourcePrefix
 
 	newListFunc := func() runtime.Object { return &api.NodeList{} }
@@ -187,35 +187,18 @@ func NewStorageForFederation(opts generic.RESTOptions, kubeletClientConfig clien
 	statusStore.UpdateStrategy = node.StatusStrategy
 
 	// Set up REST handlers
-	nodeREST := &REST{Store: store, proxyTransport: proxyTransport}
+	// TODO: On federation level we will not support endpoints "nodes/proxy"
+	// and some pod endpoints such as "pods/attach", so we put proxyTransport nil
+	// need to review and double check this decision.
+	nodeREST := &REST{Store: store, proxyTransport: nil}
 	statusREST := &StatusREST{store: &statusStore}
-	proxyREST := &noderest.ProxyREST{Store: store, ProxyTransport: proxyTransport}
-
-	// Build a NodeGetter that looks up nodes using the REST handler
-	nodeGetter := client.NodeGetterFunc(func(nodeName string) (*api.Node, error) {
-		obj, err := nodeREST.Get(api.NewContext(), nodeName)
-		if err != nil {
-			return nil, err
-		}
-		node, ok := obj.(*api.Node)
-		if !ok {
-			return nil, fmt.Errorf("unexpected type %T", obj)
-		}
-		return node, nil
-	})
-	connectionInfoGetter, err := client.NewNodeConnectionInfoGetter(nodeGetter, kubeletClientConfig)
-	if err != nil {
-		return nil, err
-	}
-	nodeREST.connection = connectionInfoGetter
-	proxyREST.Connection = connectionInfoGetter
 
 	return &NodeStorage{
 		Node:   nodeREST,
 		Status: statusREST,
-		Proxy:  proxyREST,
-		KubeletConnectionInfo: connectionInfoGetter,
-	}, nil
+		Proxy:  nil,
+		KubeletConnectionInfo: nil,
+	}
 }
 
 // Implement Redirector.

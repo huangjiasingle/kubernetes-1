@@ -14,20 +14,16 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package v1
+package util
 
 import (
-	"k8s.io/kubernetes/pkg/api/v1"
-	"k8s.io/kubernetes/pkg/runtime"
+
+	api_v1 "k8s.io/kubernetes/pkg/api/v1"
 )
 
-func addDefaultingFuncs(scheme *runtime.Scheme) error {
-	v1.RegisterDefaults(scheme)
-	return scheme.AddDefaultingFuncs(
-		v1.SetDefaults_Secret,
-		v1.SetDefaults_ServiceSpec,
-		v1.SetDefaults_NamespaceStatus,
-		v1.SetDefaults_Pod,
-		v1.SetDefaults_Node,
-	)
+// Checks if cluster-independent, user provided data in two given Nodes are eqaul. If in
+// the future the Node structure is expanded then any field that is not populated.
+// by the api server should be included here.
+func NodeEquivalent(s1, s2 *api_v1.Node) bool {
+	return ObjectMetaEquivalent(s1.ObjectMeta, s2.ObjectMeta)
 }

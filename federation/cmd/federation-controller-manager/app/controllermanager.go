@@ -39,6 +39,7 @@ import (
 	replicasetcontroller "k8s.io/kubernetes/federation/pkg/federation-controller/replicaset"
 	secretcontroller "k8s.io/kubernetes/federation/pkg/federation-controller/secret"
 	servicecontroller "k8s.io/kubernetes/federation/pkg/federation-controller/service"
+	nodecontroller "k8s.io/kubernetes/federation/pkg/federation-controller/node"
 	"k8s.io/kubernetes/federation/pkg/federation-controller/util"
 	"k8s.io/kubernetes/pkg/client/restclient"
 	"k8s.io/kubernetes/pkg/client/unversioned/clientcmd"
@@ -186,6 +187,12 @@ func StartControllers(s *options.CMServer, restClientCfg *restclient.Config) err
 	deploymentController := deploymentcontroller.NewDeploymentController(deploymentClientset)
 	// TODO: rename s.ConcurentReplicaSetSyncs
 	go deploymentController.Run(s.ConcurrentReplicaSetSyncs, wait.NeverStop)
+
+	glog.Infof("Loading client config for node controller %q", "node-controller")
+	nodeClientset := federationclientset.NewForConfigOrDie(restclient.AddUserAgent(restClientCfg, "node-controller"))
+	nodeController := nodecontroller.NewNodeController(nodeClientset)
+	glog.Infof("Running node controller")
+	go nodeController.Run(wait.NeverStop)
 
 	glog.Infof("Loading client config for ingress controller %q", "ingress-controller")
 	ingClientset := federationclientset.NewForConfigOrDie(restclient.AddUserAgent(restClientCfg, "ingress-controller"))
