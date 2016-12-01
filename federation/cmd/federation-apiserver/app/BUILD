@@ -13,6 +13,7 @@ load(
 go_library(
     name = "go_default_library",
     srcs = [
+        "batch.go",
         "core.go",
         "extensions.go",
         "federation.go",
@@ -34,6 +35,8 @@ go_library(
         "//pkg/api/rest:go_default_library",
         "//pkg/api/unversioned:go_default_library",
         "//pkg/apimachinery/registered:go_default_library",
+        "//pkg/apis/batch:go_default_library",
+        "//pkg/apis/batch/install:go_default_library",
         "//pkg/apis/extensions:go_default_library",
         "//pkg/apis/extensions/install:go_default_library",
         "//pkg/apiserver/authenticator:go_default_library",
@@ -45,6 +48,7 @@ go_library(
         "//pkg/genericapiserver:go_default_library",
         "//pkg/genericapiserver/authorizer:go_default_library",
         "//pkg/genericapiserver/validation:go_default_library",
+        "//pkg/registry/batch/job/etcd:go_default_library",
         "//pkg/registry/cachesize:go_default_library",
         "//pkg/registry/core/configmap/etcd:go_default_library",
         "//pkg/registry/core/event/etcd:go_default_library",
