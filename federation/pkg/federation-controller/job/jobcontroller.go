@@ -18,6 +18,7 @@ package job
 
 import (
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"time"
 
@@ -28,6 +29,7 @@ import (
 	fedv1 "k8s.io/kubernetes/federation/apis/federation/v1beta1"
 	fedclientset "k8s.io/kubernetes/federation/client/clientset_generated/federation_release_1_5"
 	fedutil "k8s.io/kubernetes/federation/pkg/federation-controller/util"
+	"k8s.io/kubernetes/federation/pkg/federation-controller/util/deletionhelper"
 	"k8s.io/kubernetes/federation/pkg/federation-controller/util/eventsink"
 	"k8s.io/kubernetes/federation/pkg/federation-controller/util/planner"
 	"k8s.io/kubernetes/pkg/api"
@@ -38,6 +40,7 @@ import (
 	kubeclientset "k8s.io/kubernetes/pkg/client/clientset_generated/release_1_5"
 	"k8s.io/kubernetes/pkg/client/record"
 	"k8s.io/kubernetes/pkg/controller"
+	"k8s.io/kubernetes/pkg/conversion"
 	"k8s.io/kubernetes/pkg/runtime"
 	"k8s.io/kubernetes/pkg/util/flowcontrol"
 	"k8s.io/kubernetes/pkg/util/wait"
@@ -95,6 +98,7 @@ type JobController struct {
 	eventRecorder record.EventRecorder
 
 	defaultPlanner *planner.Planner
+	deletionHelper *deletionhelper.DeletionHelper
 }
 
 func NewJobController(fedClient fedclientset.Interface) *JobController {
@@ -180,7 +184,70 @@ func NewJobController(fedClient fedclientset.Interface) *JobController {
 			return err
 		})
 
+	fjc.deletionHelper = deletionhelper.NewDeletionHelper(
+		fjc.hasFinalizerFunc,
+		fjc.removeFinalizerFunc,
+		fjc.addFinalizerFunc,
+		// objNameFunc
+		func(obj runtime.Object) string {
+			job := obj.(*batchv1.Job)
+			return job.Name
+		},
+		updateTimeout,
+		fjc.eventRecorder,
+		fjc.fedJobInformer,
+		fjc.fedUpdater,
+	)
+
 	return fjc
+}
+
+// Returns true if the given object has the given finalizer in its ObjectMeta.
+func (fjc *JobController) hasFinalizerFunc(obj runtime.Object, finalizer string) bool {
+	job := obj.(*batchv1.Job)
+	for i := range job.ObjectMeta.Finalizers {
+		if string(job.ObjectMeta.Finalizers[i]) == finalizer {
+			return true
+		}
+	}
+	return false
+}
+
+// Removes the finalizer from the given objects ObjectMeta.
+// Assumes that the given object is a job.
+func (fjc *JobController) removeFinalizerFunc(obj runtime.Object, finalizer string) (runtime.Object, error) {
+	job := obj.(*batchv1.Job)
+	newFinalizers := []string{}
+	hasFinalizer := false
+	for i := range job.ObjectMeta.Finalizers {
+		if string(job.ObjectMeta.Finalizers[i]) != finalizer {
+			newFinalizers = append(newFinalizers, job.ObjectMeta.Finalizers[i])
+		} else {
+			hasFinalizer = true
+		}
+	}
+	if !hasFinalizer {
+		// Nothing to do.
+		return obj, nil
+	}
+	job.ObjectMeta.Finalizers = newFinalizers
+	job, err := fjc.fedClient.Batch().Jobs(job.Namespace).Update(job)
+	if err != nil {
+		return nil, fmt.Errorf("failed to remove finalizer %v from job %s: %v", finalizer, job.Name, err)
+	}
+	return job, nil
+}
+
+// Adds the given finalizer to the given objects ObjectMeta.
+// Assumes that the given object is a job.
+func (fjc *JobController) addFinalizerFunc(obj runtime.Object, finalizer string) (runtime.Object, error) {
+	job := obj.(*batchv1.Job)
+	job.ObjectMeta.Finalizers = append(job.ObjectMeta.Finalizers, finalizer)
+	job, err := fjc.fedClient.Batch().Jobs(job.Namespace).Update(job)
+	if err != nil {
+		return nil, fmt.Errorf("failed to add finalizer %v to job %s: %v", finalizer, job.Name, err)
+	}
+	return job, nil
 }
 
 func (fjc *JobController) Run(workers int, stopCh <-chan struct{}) {
@@ -371,19 +438,38 @@ func (fjc *JobController) reconcileJob(key string) (reconciliationStatus, error)
 	startTime := time.Now()
 	defer glog.V(4).Infof("Finished reconcile job %q (%v)", key, time.Now().Sub(startTime))
 
-	obj, exists, err := fjc.jobStore.GetByKey(key)
+	objFromStore, exists, err := fjc.jobStore.GetByKey(key)
 	if err != nil {
 		return statusError, err
 	}
 	if !exists {
-		err = fjc.deleteJob(key)
-		if err != nil {
-			return statusError, err
-		} else {
-			return statusAllOk, nil
-		}
+		// deleted federated job, nothing need to do
+		return statusAllOk, nil
 	}
-	fjob := obj.(*batchv1.Job)
+
+	// Create a copy before modifying the obj to prevent race condition with other readers of obj from store.
+	obj, err := conversion.NewCloner().DeepCopy(objFromStore)
+	fjob, ok := obj.(*batchv1.Job)
+	if err != nil || !ok {
+		return statusError, err
+	}
+
+	// delete job
+	if fjob.DeletionTimestamp != nil {
+		if err := fjc.delete(fjob); err != nil {
+			fjc.eventRecorder.Eventf(fjob, api.EventTypeNormal, "DeleteFailed", "Job delete failed: %v", err)
+			return statusError, err
+		}
+		return statusAllOk, nil
+	}
+
+	glog.V(3).Infof("Ensuring delete object from underlying clusters finalizer for job: %s\n", key)
+	// Add the required finalizers before creating a job in underlying clusters.
+	updatedJobObj, err := fjc.deletionHelper.EnsureFinalizers(fjob)
+	if err != nil {
+		return statusError, err
+	}
+	fjob = updatedJobObj.(*batchv1.Job)
 
 	clusters, err := fjc.fedJobInformer.GetReadyClusters()
 	if err != nil {
@@ -513,25 +599,22 @@ func (fjc *JobController) reconcileJobsOnClusterChange() {
 	}
 }
 
-func (frsc *JobController) deleteJob(key string) error {
-	glog.V(3).Infof("deleting job: %v", key)
-	namespace, name, err := cache.SplitMetaNamespaceKey(key)
+// delete deletes the given job or returns error if the deletion was not complete.
+func (frsc *JobController) delete(job *batchv1.Job) error {
+	glog.V(3).Infof("Handling deletion of job: %s/%s\n", job.Namespace, job.Name)
+	_, err := frsc.deletionHelper.HandleObjectInUnderlyingClusters(job)
 	if err != nil {
 		return err
 	}
-	// try delete from all clusters
-	clusters, err := frsc.fedJobInformer.GetReadyClusters()
-	for _, cluster := range clusters {
-		clusterClient, err := frsc.fedJobInformer.GetClientsetForCluster(cluster.Name)
-		if err != nil {
-			return err
-		}
-		err = clusterClient.Batch().Jobs(namespace).Delete(name, &apiv1.DeleteOptions{})
-		if err != nil && !errors.IsNotFound(err) {
-			glog.Warningf("failed deleting repicaset %v/%v/%v, err: %v", cluster.Name, namespace, name, err)
-			return err
+
+	err = frsc.fedClient.Batch().Jobs(job.Namespace).Delete(job.Name, nil)
+	if err != nil {
+		// Its all good if the error is not found error. That means it is deleted already and we do not have to do anything.
+		// This is expected when we are processing an update as a result of job finalizer deletion.
+		// The process that deleted the last finalizer is also going to delete the job and we do not have to do anything.
+		if !errors.IsNotFound(err) {
+			return fmt.Errorf("failed to delete job: %s/%s, %v\n", job.Namespace, job.Name, err)
 		}
 	}
 	return nil
-
 }

@@ -25,6 +25,7 @@ import (
 	fedv1 "k8s.io/kubernetes/federation/apis/federation/v1beta1"
 	fedclientfake "k8s.io/kubernetes/federation/client/clientset_generated/federation_release_1_5/fake"
 	fedutil "k8s.io/kubernetes/federation/pkg/federation-controller/util"
+	"k8s.io/kubernetes/federation/pkg/federation-controller/util/deletionhelper"
 	testutil "k8s.io/kubernetes/federation/pkg/federation-controller/util/test"
 	"k8s.io/kubernetes/pkg/api/unversioned"
 	apiv1 "k8s.io/kubernetes/pkg/api/v1"
@@ -36,6 +37,7 @@ import (
 	"k8s.io/kubernetes/pkg/watch"
 
 	"github.com/stretchr/testify/assert"
+	"reflect"
 	"strings"
 )
 
@@ -58,12 +60,10 @@ func installWatchReactor(fakeClien *core.Fake, resource string) chan runtime.Obj
 		return false, nil, nil
 	})
 	fakeClien.PrependReactor("delete", resource, func(action core.Action) (handled bool, ret runtime.Object, err error) {
-		now := unversioned.Now()
 		obj := &batchv1.Job{
 			ObjectMeta: apiv1.ObjectMeta{
-				Name:              action.(core.DeleteAction).GetName(),
-				Namespace:         action.GetNamespace(),
-				DeletionTimestamp: &now,
+				Name:      action.(core.DeleteAction).GetName(),
+				Namespace: action.GetNamespace(),
 			},
 		}
 		fakeWatch.Delete(obj)
@@ -116,8 +116,19 @@ func TestJobController(t *testing.T) {
 	test := func(job *batchv1.Job, parallelism1, parallelism2, completions1, completions2 int32) {
 		job, _ = fedclientset.Batch().Jobs(apiv1.NamespaceDefault).Create(job)
 
+		joinErrors := func(errors []error) error {
+			if len(errors) == 0 {
+				return nil
+			}
+			errorStrings := []string{}
+			for _, err := range errors {
+				errorStrings = append(errorStrings, err.Error())
+			}
+			return fmt.Errorf("%s", strings.Join(errorStrings, "\n"))
+		}
+
 		// check local jobs are created with correct spec
-		checkJob := func(parallelism, completions int32) testutil.CheckingFunction {
+		checkLocalJob := func(parallelism, completions int32) testutil.CheckingFunction {
 			return func(obj runtime.Object) error {
 				errors := []error{}
 				ljob := obj.(*batchv1.Job)
@@ -132,21 +143,23 @@ func TestJobController(t *testing.T) {
 						errors = append(errors, err)
 					}
 				}
-
-				if len(errors) != 0 {
-					errorStrings := []string{}
-					for _, err := range errors {
-						errorStrings = append(errorStrings, err.Error())
-					}
-					return fmt.Errorf("%s", strings.Join(errorStrings, "\n"))
-				}
-
-				return nil
+				return joinErrors(errors)
 			}
 		}
-		assert.NoError(t, testutil.CheckObjectFromChan(fedChan, checkJob(*job.Spec.Parallelism, completions1+completions2)))
-		assert.NoError(t, testutil.CheckObjectFromChan(kube1Chan, checkJob(parallelism1, completions1)))
-		assert.NoError(t, testutil.CheckObjectFromChan(kube2Chan, checkJob(parallelism2, completions2)))
+		checkFedJob := func(obj runtime.Object) error {
+			errors := []error{}
+			fjob := obj.(*batchv1.Job)
+			if !jobController.hasFinalizerFunc(fjob, deletionhelper.FinalizerDeleteFromUnderlyingClusters) {
+				errors = append(errors, fmt.Errorf("Job %s/%s should have %s finalizer", fjob.Namespace, fjob.Name, deletionhelper.FinalizerDeleteFromUnderlyingClusters))
+			}
+			if !jobController.hasFinalizerFunc(fjob, apiv1.FinalizerOrphan) {
+				errors = append(errors, fmt.Errorf("Job %s/%s should have %s finalizer", fjob.Namespace, fjob.Name, apiv1.FinalizerOrphan))
+			}
+			return joinErrors(errors)
+		}
+		assert.NoError(t, testutil.CheckObjectFromChan(kube1Chan, checkLocalJob(parallelism1, completions1)))
+		assert.NoError(t, testutil.CheckObjectFromChan(kube2Chan, checkLocalJob(parallelism2, completions2)))
+		assert.NoError(t, testutil.CheckObjectFromChan(fedChan, checkFedJob))
 
 		// finish local jobs
 		job1, _ := kube1clientset.Batch().Jobs(apiv1.NamespaceDefault).Get(job.Name)
@@ -171,36 +184,39 @@ func TestJobController(t *testing.T) {
 			if err := checkEqual(t, job.Status.Succeeded, job1.Status.Succeeded+job2.Status.Succeeded, "Status.Succeeded"); err != nil {
 				errors = append(errors, err)
 			}
-
-			if len(errors) != 0 {
-				errorStrings := []string{}
-				for _, err := range errors {
-					errorStrings = append(errorStrings, err.Error())
-				}
-				return fmt.Errorf("%s", strings.Join(errorStrings, "\n"))
-			}
-
-			return nil
+			return joinErrors(errors)
 		}))
 
-		fedclientset.Batch().Jobs(apiv1.NamespaceDefault).Delete(job.Name, &apiv1.DeleteOptions{})
+		// delete fed job by set deletion time, and remove orphan finalizer
+		job, _ = fedclientset.Batch().Jobs(apiv1.NamespaceDefault).Get(job.Name)
+		deletionTimestamp := unversioned.Now()
+		job.DeletionTimestamp = &deletionTimestamp
+		jobController.removeFinalizerFunc(job, apiv1.FinalizerOrphan)
+		fedclientset.Batch().Jobs(apiv1.NamespaceDefault).Update(job)
 
-		// check local jobs are deleted
-		checkNotFound := func(obj runtime.Object) error {
-			if obj.(*batchv1.Job).DeletionTimestamp == nil {
-				return fmt.Errorf("%s should be deleted", job.Name)
+		// check jobs are deleted
+		checkDeleted := func(obj runtime.Object) error {
+			djob := obj.(*batchv1.Job)
+			deletedJob := &batchv1.Job{
+				ObjectMeta: apiv1.ObjectMeta{
+					Name:      djob.Name,
+					Namespace: djob.Namespace,
+				},
+			}
+			if !reflect.DeepEqual(djob, deletedJob) {
+				return fmt.Errorf("%s/%s should be deleted", djob.Namespace, djob.Name)
 			}
 			return nil
 		}
-		assert.NoError(t, testutil.CheckObjectFromChan(kube1Chan, checkNotFound))
-		assert.NoError(t, testutil.CheckObjectFromChan(kube2Chan, checkNotFound))
-		assert.NoError(t, testutil.CheckObjectFromChan(fedChan, checkNotFound))
+		assert.NoError(t, testutil.CheckObjectFromChan(kube1Chan, checkDeleted))
+		assert.NoError(t, testutil.CheckObjectFromChan(kube2Chan, checkDeleted))
+		assert.NoError(t, testutil.CheckObjectFromChan(fedChan, checkDeleted))
 	}
 
 	test(newJob("job1", 2, 7), 1, 1, 4, 3)
 	test(newJob("job2", 2, -1), 1, 1, -1, -1)
 	test(newJob("job3", 7, 2), 4, 3, 1, 1)
-	test(newJob("job3", 7, 1), 4, 3, 1, 0)
+	test(newJob("job4", 7, 1), 4, 3, 1, 0)
 }
 
 func checkEqual(_ *testing.T, expected, actual interface{}, msg string) error {
