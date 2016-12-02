@@ -38,7 +38,8 @@ import (
 )
 
 const (
-	allClustersKey = "ALL_CLUSTERS"
+	ClusterNameAnnotation = "federation.kubernetes.io/cluster-name"
+	allClustersKey        = "ALL_CLUSTERS"
 )
 
 type NodeController struct {
@@ -69,7 +70,7 @@ type NodeController struct {
 	// For events
 	eventRecorder record.EventRecorder
 
-	nodeReviewDelay  time.Duration
+	nodeReviewDelay       time.Duration
 	clusterAvailableDelay time.Duration
 	smallDelay            time.Duration
 	updateTimeout         time.Duration
@@ -83,11 +84,11 @@ func NewNodeController(client federationclientset.Interface) *NodeController {
 
 	nodecontroller := &NodeController{
 		federatedApiClient:    client,
-		nodeReviewDelay:  time.Second * 10,
+		nodeReviewDelay:       time.Second * 10,
 		clusterAvailableDelay: time.Second * 20,
 		smallDelay:            time.Second * 3,
 		updateTimeout:         time.Second * 30,
-		nodeBackoff:      flowcontrol.NewBackOff(5*time.Second, time.Minute),
+		nodeBackoff:           flowcontrol.NewBackOff(5*time.Second, time.Minute),
 		eventRecorder:         recorder,
 	}
 
@@ -189,7 +190,7 @@ func (nodecontroller *NodeController) deliverNodeObj(obj interface{}, delay time
 
 // Adds backoff to delay if this delivery is related to some failure. Resets backoff if there was no failure.
 func (nodecontroller *NodeController) deliverNode(node types.NodeName, delay time.Duration, failed bool) {
-	key := string(node);
+	key := string(node)
 	if failed {
 		nodecontroller.nodeBackoff.Next(key, time.Now())
 		delay = delay + nodecontroller.nodeBackoff.Get(key)
@@ -238,7 +239,7 @@ func (nodecontroller *NodeController) reconcileNode(node types.NodeName) {
 		return
 	}
 
-	key := string (node)
+	key := string(node)
 	baseNodeObj, exist, err := nodecontroller.nodeInformerStore.GetByKey(key)
 	if err != nil {
 		glog.Errorf("Failed to query main node store for %v: %v", key, err)
@@ -261,7 +262,13 @@ func (nodecontroller *NodeController) reconcileNode(node types.NodeName) {
 	}
 
 	operations := make([]util.FederatedOperation, 0)
+	targetClusterName := parseTargetClusterName(baseNode)
 	for _, cluster := range clusters {
+
+		if len(targetClusterName) > 0 && targetClusterName != cluster.GetObjectMeta().GetName() {
+			continue
+		}
+
 		clusterNodeObj, found, err := nodecontroller.nodeFederatedInformer.GetTargetStore().GetByKey(cluster.Name, key)
 		if err != nil {
 			glog.Errorf("Failed to get %s from %s: %v, retrying shortly", key, cluster.Name, err)
@@ -314,4 +321,16 @@ func (nodecontroller *NodeController) reconcileNode(node types.NodeName) {
 		nodecontroller.deliverNode(node, 0, true)
 		return
 	}
+}
+
+func parseTargetClusterName(node *api_v1.Node) string {
+	if node.Annotations == nil {
+		return ""
+	}
+	clusterName, found := node.Annotations[ClusterNameAnnotation]
+	if !found {
+		return ""
+	}
+
+	return clusterName
 }
