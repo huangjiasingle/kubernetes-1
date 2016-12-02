@@ -50,7 +50,7 @@ func installCoreAPIs(s *options.ServerRunOptions, g *genericapiserver.GenericAPI
 	configMapStore := configmapetcd.NewREST(restOptionsFactory.NewFor(api.Resource("configmaps")))
 	eventStore := eventetcd.NewREST(restOptionsFactory.NewFor(api.Resource("events")), uint64(s.EventTTL.Seconds()))
 	podStore := podetcd.NewFedStorage(s.GenericServerRunOptions.StorageConfig.ServerList, restOptionsFactory.NewFor(api.Resource("pods")), nil, nil, nil)
-	nodeStore := nodeetcd.NewStorageForFederation(restOptionsFactory.NewFor(api.Resource("nodes")))
+	nodeStore := nodeetcd.NewStorageForFederation(s.GenericServerRunOptions.StorageConfig.ServerList, restOptionsFactory.NewFor(api.Resource("nodes")))
 
 	coreResources := map[string]rest.Storage{
 		"secrets":             secretStore,

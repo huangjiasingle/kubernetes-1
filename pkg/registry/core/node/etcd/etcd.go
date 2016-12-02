@@ -25,6 +25,7 @@ import (
 	"k8s.io/kubernetes/pkg/api/rest"
 	"k8s.io/kubernetes/pkg/kubelet/client"
 	"k8s.io/kubernetes/pkg/registry/cachesize"
+	etcdclient "github.com/coreos/etcd/client"
 	"k8s.io/kubernetes/pkg/registry/core/node"
 	noderest "k8s.io/kubernetes/pkg/registry/core/node/rest"
 	"k8s.io/kubernetes/pkg/registry/generic"
@@ -142,7 +143,7 @@ func NewStorage(opts generic.RESTOptions, kubeletClientConfig client.KubeletClie
 }
 
 // NewStorage returns a NodeStorage object that will work against nodes.
-func NewStorageForFederation(opts generic.RESTOptions) (*NodeStorage) {
+func NewStorageForFederation(ip []string, opts generic.RESTOptions) (*NodeStorage) {
 	prefix := "/" + opts.ResourcePrefix
 
 	newListFunc := func() runtime.Object { return &api.NodeList{} }
@@ -155,7 +156,14 @@ func NewStorageForFederation(opts generic.RESTOptions) (*NodeStorage) {
 		newListFunc,
 		node.NodeNameTriggerFunc)
 
-	storageForFederation := registry.NewProxyStore(storageInterface)
+	//TODO: use existing interface to get cluster list rather than
+	// talking to etcd directly
+	sourCli, _ := etcdclient.New(etcdclient.Config{
+		Endpoints: ip,
+		Transport: etcdclient.DefaultTransport,
+	})
+
+	storageForFederation := registry.NewNodeStore(sourCli, storageInterface)
 
 	store := &registry.Store{
 		NewFunc:     func() runtime.Object { return &api.Node{} },
