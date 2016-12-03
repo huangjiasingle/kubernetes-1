@@ -71,6 +71,12 @@ type ControllerManagerConfiguration struct {
 	LeaderElection componentconfig.LeaderElectionConfiguration `json:"leaderElection"`
 	// contentType is contentType of requests sent to apiserver.
 	ContentType string `json:"contentType"`
+
+	// enableResourceMetricBasedScheduling enables Distribution of replicas to different clusters based on
+	// the accumulated available resources of each cluster
+	EnableResourceMetricBasedScheduling bool `json:"enableResourceMetricBasedScheduling"`
+	// clusterResourceRefreshPeriod is the period for getting the latest resources from each cluster in replica controller.
+	ClusterResourceRefreshPeriod unversioned.Duration `json:"clusterResourceRefreshPeriod"`
 }
 
 // CMServer is the main context object for the controller manager.
@@ -99,6 +105,9 @@ func NewCMServer() *CMServer {
 			APIServerQPS:              20.0,
 			APIServerBurst:            30,
 			LeaderElection:            leaderelection.DefaultLeaderElectionConfiguration(),
+			EnableResourceMetricBasedScheduling:false,
+			ClusterResourceRefreshPeriod:unversioned.Duration{Duration: 1 * time.Second},
+
 		},
 	}
 	return &s
@@ -124,5 +133,9 @@ func (s *CMServer) AddFlags(fs *pflag.FlagSet) {
 	fs.IntVar(&s.APIServerBurst, "federated-api-burst", s.APIServerBurst, "Burst to use while talking with federation apiserver")
 	fs.StringVar(&s.DnsProvider, "dns-provider", s.DnsProvider, "DNS provider. Valid values are: "+fmt.Sprintf("%q", dnsprovider.RegisteredDnsProviders()))
 	fs.StringVar(&s.DnsConfigFile, "dns-provider-config", s.DnsConfigFile, "Path to config file for configuring DNS provider.")
+
+	fs.DurationVar(&s.ClusterResourceRefreshPeriod.Duration, "cluster-resource-refresh-period", s.ClusterResourceRefreshPeriod.Duration, "The period for refreshing latest available resources from each cluster in ReplicationController.")
+	fs.BoolVar(&s.EnableResourceMetricBasedScheduling, "", s.EnableResourceMetricBasedScheduling, "Enable Distribution of the replicas based on the available reources of each cluster ")
+
 	leaderelection.BindFlags(&s.LeaderElection, fs)
 }

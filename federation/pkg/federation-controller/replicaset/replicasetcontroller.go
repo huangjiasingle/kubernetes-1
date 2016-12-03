@@ -47,6 +47,9 @@ import (
 	"k8s.io/kubernetes/pkg/util/wait"
 	"k8s.io/kubernetes/pkg/util/workqueue"
 	"k8s.io/kubernetes/pkg/watch"
+	"k8s.io/kubernetes/pkg/api/resource"
+
+	"sync"
 )
 
 const (
@@ -100,10 +103,18 @@ type ReplicaSetController struct {
 	deletionHelper *deletionhelper.DeletionHelper
 
 	defaultPlanner *planner.Planner
+	// enableResourceMetricBasedScheduling enables Distribution of replicas to different clusters based on
+	// the accumulated available resources of each cluster
+	enableResourceMetricBasedScheduling bool
+	// clusterResourceRefreshPeriod is the period for getting the latest resources from each cluster in replica controller.
+	clusterResourceRefreshPeriod time.Duration
+
+	schedData MetricSchedulerData
 }
 
 // NewclusterController returns a new cluster controller
-func NewReplicaSetController(federationClient fedclientset.Interface) *ReplicaSetController {
+func NewReplicaSetController(federationClient fedclientset.Interface,refreshDuration time.Duration,
+				enableMetricBasedScheduler bool) *ReplicaSetController {
 	broadcaster := record.NewBroadcaster()
 	broadcaster.StartRecordingToSink(eventsink.NewFederatedEventSink(federationClient))
 	recorder := broadcaster.NewRecorder(api.EventSource{Component: "federated-replicaset-controller"})
@@ -120,6 +131,8 @@ func NewReplicaSetController(federationClient fedclientset.Interface) *ReplicaSe
 			},
 		}),
 		eventRecorder: recorder,
+		enableResourceMetricBasedScheduling:enableMetricBasedScheduler,
+		clusterResourceRefreshPeriod:refreshDuration,
 	}
 
 	replicaSetFedInformerFactory := func(cluster *fedv1.Cluster, clientset kubeclientset.Interface) (cache.Store, cache.ControllerInterface) {
@@ -296,6 +309,9 @@ func (frsc *ReplicaSetController) Run(workers int, stopCh <-chan struct{}) {
 		go wait.Until(frsc.worker, time.Second, stopCh)
 	}
 
+	if frsc.enableResourceMetricBasedScheduling {
+		go wait.Forever(func() { frsc.updateClusterResources() }, frsc.clusterResourceRefreshPeriod)
+	}
 	fedutil.StartBackoffGC(frsc.replicaSetBackoff, stopCh)
 
 	<-stopCh
@@ -307,6 +323,90 @@ func (frsc *ReplicaSetController) Run(workers int, stopCh <-chan struct{}) {
 	frsc.fedPodInformer.Stop()
 }
 
+type ClusterAccumulatedResources struct {
+	cpu resource.Quantity
+	mem resource.Quantity
+}
+
+type ClusterResponse struct {
+	clusterName string
+	res ClusterAccumulatedResources
+	err error
+}
+
+type ClusterRequest struct {
+	clusterName string
+	frscLocal *ReplicaSetController
+	wg *sync.WaitGroup
+	respChan chan ClusterResponse
+}
+
+type MetricSchedulerData struct {
+	sync.Mutex
+	frsPref *fed.FederatedReplicaSetPreferences
+}
+
+func (frsc *ReplicaSetController) updateClusterResources(){
+
+	clusters ,err := frsc.fedPodInformer.GetReadyClusters()
+	if err != nil {
+		glog.Errorf("Failed GetReadyClusters in updateClusterResources: %v", err)
+		return
+	}
+	var numReq int
+	numReq = len(clusters)
+
+	respChan := make (chan ClusterResponse,numReq)
+	var wg sync.WaitGroup
+
+	//wg.Add(numReq)
+	for _,cluster:= range clusters {
+		wg.Add(1)
+		var req ClusterRequest
+		req.clusterName = cluster.Name
+		req.frscLocal = frsc
+		req.wg = &wg
+		req.respChan = respChan
+
+		go func(request ClusterRequest) {
+			var clustRes ClusterAccumulatedResources
+			clusterName := request.clusterName
+			defer request.wg.Done()
+			client, err := request.frscLocal.fedPodInformer.GetClientsetForCluster(clusterName)
+			if err != nil {
+				glog.Errorf("Failed GetClientsetForCluster in updateClusterResources: %v for cluster %s", err,clusterName)
+				request.respChan <- ClusterResponse{clusterName,clustRes,err}
+				return
+			}
+
+			nodeList, err := client.CoreV1().Nodes().List(apiv1.ListOptions{})
+			if err != nil {
+				glog.Errorf("Failed to get the Nodes List in updateClusterResources: %v for cluster %s", err,clusterName)
+				request.respChan <- ClusterResponse{clusterName,clustRes,err}
+				return
+			}
+			for i, _ := range nodeList.Items {
+				var res api.ResourceList
+				err = apiv1.Convert_v1_ResourceList_To_api_ResourceList(&(nodeList.Items[i].Status.Allocatable), &res, nil)
+				if err != nil {
+					glog.Errorf("Failed to Convert_v1_ResourceList_To_api_ResourceList in updateClusterResources: %v for cluster %s", err,clusterName)
+					request.respChan <- ClusterResponse{clusterName,clustRes,err}
+					return
+				}
+				clustRes.cpu.Add(*res.Cpu())
+				clustRes.mem.Add(*res.Memory())
+			}
+			request.respChan <- ClusterResponse{clusterName,clustRes,err}
+		}(req)
+
+	}
+	//wait till all the resources received from all the clusters
+	wg.Wait()
+
+	//calculate the ratios from the cluster resources and update the same in global schedData
+
+
+}
 func (frsc *ReplicaSetController) isSynced() bool {
 	if !frsc.fedReplicaSetInformer.ClustersSynced() {
 		glog.V(2).Infof("Cluster list not synced")
@@ -422,6 +522,11 @@ func (frsc *ReplicaSetController) schedule(frs *extensionsv1.ReplicaSet, cluster
 		glog.Info("Invalid ReplicaSet specific preference, use default. rs: %v, err: %v", frs, err)
 	}
 	if frsPref != nil { // create a new planner if user specified a preference
+		plnr = planner.NewPlanner(frsPref)
+	} else if frsc.enableResourceMetricBasedScheduling {
+		frsc.schedData.Lock()
+		frsPref = frsc.schedData.frsPref
+		frsc.schedData.Unlock()
 		plnr = planner.NewPlanner(frsPref)
 	}
 

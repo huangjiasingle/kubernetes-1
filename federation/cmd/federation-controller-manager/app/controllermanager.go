@@ -36,10 +36,10 @@ import (
 	ingresscontroller "k8s.io/kubernetes/federation/pkg/federation-controller/ingress"
 	jobcontroller "k8s.io/kubernetes/federation/pkg/federation-controller/job"
 	namespacecontroller "k8s.io/kubernetes/federation/pkg/federation-controller/namespace"
+	nodecontroller "k8s.io/kubernetes/federation/pkg/federation-controller/node"
 	replicasetcontroller "k8s.io/kubernetes/federation/pkg/federation-controller/replicaset"
 	secretcontroller "k8s.io/kubernetes/federation/pkg/federation-controller/secret"
 	servicecontroller "k8s.io/kubernetes/federation/pkg/federation-controller/service"
-	nodecontroller "k8s.io/kubernetes/federation/pkg/federation-controller/node"
 	"k8s.io/kubernetes/federation/pkg/federation-controller/util"
 	"k8s.io/kubernetes/pkg/client/restclient"
 	"k8s.io/kubernetes/pkg/client/unversioned/clientcmd"
@@ -176,7 +176,8 @@ func StartControllers(s *options.CMServer, restClientCfg *restclient.Config) err
 	daemonsetcontroller.Run(wait.NeverStop)
 
 	replicaSetClientset := federationclientset.NewForConfigOrDie(restclient.AddUserAgent(restClientCfg, replicasetcontroller.UserAgentName))
-	replicaSetController := replicasetcontroller.NewReplicaSetController(replicaSetClientset)
+	replicaSetController := replicasetcontroller.NewReplicaSetController(replicaSetClientset,
+		s.ClusterResourceRefreshPeriod.Duration, s.EnableResourceMetricBasedScheduling)
 	go replicaSetController.Run(s.ConcurrentReplicaSetSyncs, wait.NeverStop)
 
 	jobClientset := federationclientset.NewForConfigOrDie(restclient.AddUserAgent(restClientCfg, jobcontroller.UserAgentName))
