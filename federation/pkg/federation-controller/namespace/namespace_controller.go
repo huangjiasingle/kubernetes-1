@@ -41,7 +41,8 @@ import (
 )
 
 const (
-	allClustersKey = "ALL_CLUSTERS"
+	allClustersKey       = "ALL_CLUSTERS"
+	defaultNamespaceName = "default"
 )
 
 type NamespaceController struct {
@@ -261,7 +262,24 @@ func (nc *NamespaceController) removeFinalizerFromSpec(namespace *api_v1.Namespa
 	return updatedNamespace, nil
 }
 
+func (nc *NamespaceController) initNamespaces() {
+	//Always create a default namespace if it doesn't exist yet
+	//The get method will return an error if the ns doesn't exist
+	_, err := nc.federatedApiClient.Core().Namespaces().Get(defaultNamespaceName)
+	if err != nil {
+		nsDefault := api_v1.Namespace{
+			ObjectMeta: api_v1.ObjectMeta{
+				Name: defaultNamespaceName,
+			},
+		}
+		nc.federatedApiClient.Core().Namespaces().Create(&nsDefault)
+	}
+}
+
 func (nc *NamespaceController) Run(stopChan <-chan struct{}) {
+
+	nc.initNamespaces()
+
 	go nc.namespaceInformerController.Run(stopChan)
 	nc.namespaceFederatedInformer.Start()
 	go func() {
