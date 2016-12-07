@@ -135,7 +135,7 @@ func (s *CMServer) AddFlags(fs *pflag.FlagSet) {
 	fs.StringVar(&s.DnsConfigFile, "dns-provider-config", s.DnsConfigFile, "Path to config file for configuring DNS provider.")
 
 	fs.DurationVar(&s.ClusterResourceRefreshPeriod.Duration, "cluster-resource-refresh-period", s.ClusterResourceRefreshPeriod.Duration, "The period for refreshing latest available resources from each cluster in ReplicationController.")
-	fs.BoolVar(&s.EnableResourceMetricBasedScheduling, "", s.EnableResourceMetricBasedScheduling, "Enable Distribution of the replicas based on the available reources of each cluster ")
+	fs.BoolVar(&s.EnableResourceMetricBasedScheduling, "enable-metricbased-scheduling", s.EnableResourceMetricBasedScheduling, "Enable Distribution of the replicas based on the available reources of each cluster ")
 
 	leaderelection.BindFlags(&s.LeaderElection, fs)
 }

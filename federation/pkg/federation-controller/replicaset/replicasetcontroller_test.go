@@ -107,7 +107,7 @@ func TestReplicaSetController(t *testing.T) {
 			return nil, fmt.Errorf("Unknown cluster: %v", cluster.Name)
 		}
 	}
-	replicaSetController := NewReplicaSetController(fedclientset)
+	replicaSetController := NewReplicaSetController(fedclientset,0,false)
 	rsFedinformer := testutil.ToFederatedInformerForTestOnly(replicaSetController.fedReplicaSetInformer)
 	rsFedinformer.SetClientFactory(fedInformerClientFactory)
 	podFedinformer := testutil.ToFederatedInformerForTestOnly(replicaSetController.fedPodInformer)
