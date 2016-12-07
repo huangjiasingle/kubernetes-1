@@ -24,6 +24,8 @@ type NodeExpansion interface{}
 
 type PodExpansion interface{}
 
+type ResourceQuotaExpansion interface{}
+
 type SecretExpansion interface{}
 
 type ServiceExpansion interface{}

@@ -534,6 +534,10 @@ func (nc *NamespaceController) removeKubernetesFinalizer(namespace *api_v1.Names
 	if err != nil {
 		return nil, fmt.Errorf("failed to delete daemonsets list from namespace: %v", err)
 	}
+	err = nc.federatedApiClient.Core().ResourceQuotas(namespace.Name).DeleteCollection(&api_v1.DeleteOptions{}, api_v1.ListOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to delete resourcequotas list from namespace: %v", err)
+	}
 	err = nc.federatedApiClient.Extensions().Deployments(namespace.Name).DeleteCollection(&api_v1.DeleteOptions{}, api_v1.ListOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to delete deployments list from namespace: %v", err)

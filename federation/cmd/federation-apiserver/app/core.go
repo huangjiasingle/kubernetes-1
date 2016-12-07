@@ -37,10 +37,9 @@ import (
 	configmapetcd "k8s.io/kubernetes/pkg/registry/core/configmap/etcd"
 	eventetcd "k8s.io/kubernetes/pkg/registry/core/event/etcd"
 	namespaceetcd "k8s.io/kubernetes/pkg/registry/core/namespace/etcd"
-	podetcd "k8s.io/kubernetes/pkg/registry/core/pod/etcd"
 	secretetcd "k8s.io/kubernetes/pkg/registry/core/secret/etcd"
 	serviceetcd "k8s.io/kubernetes/pkg/registry/core/service/etcd"
-	nodeetcd "k8s.io/kubernetes/pkg/registry/core/node/etcd"
+	resourcequotaetcd "k8s.io/kubernetes/pkg/registry/core/resourcequota/etcd"
 )
 
 func installCoreAPIs(s *options.ServerRunOptions, g *genericapiserver.GenericAPIServer, restOptionsFactory restOptionsFactory) {
@@ -49,21 +48,19 @@ func installCoreAPIs(s *options.ServerRunOptions, g *genericapiserver.GenericAPI
 	secretStore := secretetcd.NewREST(restOptionsFactory.NewFor(api.Resource("secrets")))
 	configMapStore := configmapetcd.NewREST(restOptionsFactory.NewFor(api.Resource("configmaps")))
 	eventStore := eventetcd.NewREST(restOptionsFactory.NewFor(api.Resource("events")), uint64(s.EventTTL.Seconds()))
-	podStore := podetcd.NewFedStorage(s.GenericServerRunOptions.StorageConfig.ServerList, restOptionsFactory.NewFor(api.Resource("pods")), nil, nil, nil)
-	nodeStore := nodeetcd.NewStorageForFederation(s.GenericServerRunOptions.StorageConfig.ServerList, restOptionsFactory.NewFor(api.Resource("nodes")))
+	resourceQuotaStore, resourceQuotaStatusStore := resourcequotaetcd.NewREST(restOptionsFactory.NewFor(api.Resource("resourcequotas")))
 
 	coreResources := map[string]rest.Storage{
-		"secrets":             secretStore,
-		"services":            serviceStore,
-		"services/status":     serviceStatusStore,
-		"namespaces":          namespaceStore,
-		"namespaces/status":   namespaceStatusStore,
-		"namespaces/finalize": namespaceFinalizeStore,
-		"events":              eventStore,
-		"configmaps":          configMapStore,
-		"pods":                podStore.Pod,
-		"nodes":	       nodeStore.Node,
-		"nodes/status":	       nodeStore.Status,
+		"secrets":               secretStore,
+		"services":              serviceStore,
+		"services/status":       serviceStatusStore,
+		"namespaces":            namespaceStore,
+		"namespaces/status":     namespaceStatusStore,
+		"namespaces/finalize":   namespaceFinalizeStore,
+		"events":                eventStore,
+		"configmaps":            configMapStore,
+		"resourcequotas":        resourceQuotaStore,
+		"resourcequotas/status": resourceQuotaStatusStore,
 	}
 	coreGroupMeta := registered.GroupOrDie(core.GroupName)
 	apiGroupInfo := genericapiserver.APIGroupInfo{
