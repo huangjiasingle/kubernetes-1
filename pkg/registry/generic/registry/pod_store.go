@@ -95,12 +95,11 @@ func (s *podStore) List(ctx context.Context, key, resourceVersion string, pred s
 		panic("need ptr to slice")
 	}
 	// get clusters from etcd
-	clusters, _, _ := s.listEtcdNode(ctx, "/registry/clusters")
+	clusters, _, _ := listEtcdNode(s.etcdKeysAPI, ctx, "/registry/clusters")
 
 	for _, node := range clusters {
 		if node.Value != "" {
 			v := node.Value
-			glog.Infof("value %v", v)
 			ip := strings.Split(strings.Split(v, "\"serverAddress\":\"")[1], "\"}]}")[0]
 			// get the list of pods from the clusters
 			clusterConfig, err := clientcmd.BuildConfigFromFlags(ip, "")
@@ -109,6 +108,10 @@ func (s *podStore) List(ctx context.Context, key, resourceVersion string, pred s
 				tmpPodList, _ := clientset.Core().Pods(api_v1.NamespaceAll).List(api_v1.ListOptions{})
 				for i := range tmpPodList.Items {
 					p := tmpPodList.Items[i]
+					if p.Annotations == nil {
+						p.Annotations = make(map[string]string)
+					}
+					p.Annotations[ClusterNameAnnotation] = node.Key
 					vPtr.Set(reflect.Append(vPtr, reflect.ValueOf(p)))
 				}
 			}
@@ -117,7 +120,7 @@ func (s *podStore) List(ctx context.Context, key, resourceVersion string, pred s
 	return nil
 }
 
-func (s *podStore) listEtcdNode(ctx context.Context, key string) ([]*etcd.Node, uint64, error) {
+func listEtcdNode(keysAPI etcd.KeysAPI, ctx context.Context, key string) ([]*etcd.Node, uint64, error) {
 	if ctx == nil {
 		glog.Errorf("Context is nil")
 	}
@@ -125,7 +128,7 @@ func (s *podStore) listEtcdNode(ctx context.Context, key string) ([]*etcd.Node, 
 		Recursive: true,
 		Sort:      true,
 	}
-	result, err := s.etcdKeysAPI.Get(ctx, key, &opts)
+	result, err := keysAPI.Get(ctx, key, &opts)
 	if err != nil {
 		var index uint64
 		if etcdError, ok := err.(etcd.Error); ok {

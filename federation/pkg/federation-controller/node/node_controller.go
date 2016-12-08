@@ -101,10 +101,12 @@ func NewNodeController(client federationclientset.Interface) *NodeController {
 		&cache.ListWatch{
 			ListFunc: func(options api.ListOptions) (pkg_runtime.Object, error) {
 				versionedOptions := util.VersionizeV1ListOptions(options)
+				versionedOptions.ResourceVersion = "0"
 				return client.Core().Nodes().List(versionedOptions)
 			},
 			WatchFunc: func(options api.ListOptions) (watch.Interface, error) {
 				versionedOptions := util.VersionizeV1ListOptions(options)
+				versionedOptions.ResourceVersion = "0"
 				return client.Core().Nodes().Watch(versionedOptions)
 			},
 		},
@@ -120,10 +122,12 @@ func NewNodeController(client federationclientset.Interface) *NodeController {
 				&cache.ListWatch{
 					ListFunc: func(options api.ListOptions) (pkg_runtime.Object, error) {
 						versionedOptions := util.VersionizeV1ListOptions(options)
+						versionedOptions.ResourceVersion = "0"
 						return targetClient.Core().Nodes().List(versionedOptions)
 					},
 					WatchFunc: func(options api.ListOptions) (watch.Interface, error) {
 						versionedOptions := util.VersionizeV1ListOptions(options)
+						versionedOptions.ResourceVersion = "0"
 						return targetClient.Core().Nodes().Watch(versionedOptions)
 					},
 				},

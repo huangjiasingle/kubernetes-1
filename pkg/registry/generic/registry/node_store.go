@@ -27,14 +27,16 @@ import (
 
 	//kubeclientset "k8s.io/kubernetes/pkg/client/clientset_generated/release_1_5"
 	etcd "github.com/coreos/etcd/client"
-	"github.com/golang/glog"
 	api_v1 "k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/meta"
 	kubeclientset "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
 	"k8s.io/kubernetes/pkg/client/restclient"
 	"k8s.io/kubernetes/pkg/client/unversioned/clientcmd"
-	etcdutil "k8s.io/kubernetes/pkg/storage/etcd/util"
 	"strings"
+)
+
+const (
+	ClusterNameAnnotation = "federation.kubernetes.io/cluster-name"
 )
 
 type nodeStore struct {
@@ -81,60 +83,46 @@ func (s *nodeStore) GetToList(ctx context.Context, key string, resourceVersion s
 
 // List implements storage.Interface.List.
 func (s *nodeStore) List(ctx context.Context, key, resourceVersion string, pred storage.SelectionPredicate, listObj runtime.Object) error {
-	listPtr, err := meta.GetItemsPtr(listObj)
-	if err != nil {
-		return err
-	}
-	vPtr, err := conversion.EnforcePtr(listPtr)
-	if err != nil || vPtr.Kind() != reflect.Slice {
-		// This should not happen at runtime.
-		panic("need ptr to slice")
-	}
-	// get clusters from etcd
-	clusters, _, _ := s.listEtcdNode(ctx, "/registry/clusters")
+	if resourceVersion == "0" {
+		// return cache only
+		return s.store.List(ctx, key, "", pred, listObj)
 
-	for _, node := range clusters {
-		if node.Value != "" {
-			v := node.Value
-			glog.Infof("value %v", v)
-			ip := strings.Split(strings.Split(v, "\"serverAddress\":\"")[1], "\"}]}")[0]
-			// get the list of nodes from the clusters
-			clusterConfig, err := clientcmd.BuildConfigFromFlags(ip, "")
-			if err == nil && clusterConfig != nil {
-				clientset := kubeclientset.NewForConfigOrDie(restclient.AddUserAgent(clusterConfig, userAgentName))
-				tmpNodeList, _ := clientset.Core().Nodes().List(api_v1.ListOptions{})
-				for i := range tmpNodeList.Items {
-					p := tmpNodeList.Items[i]
-					vPtr.Set(reflect.Append(vPtr, reflect.ValueOf(p)))
+	} else {
+		listPtr, err := meta.GetItemsPtr(listObj)
+		if err != nil {
+			return err
+		}
+		vPtr, err := conversion.EnforcePtr(listPtr)
+		if err != nil || vPtr.Kind() != reflect.Slice {
+			// This should not happen at runtime.
+			panic("need ptr to slice")
+		}
+		// get clusters from etcd
+		clusters, _, _ := listEtcdNode(s.etcdKeysAPI, ctx, "/registry/clusters")
+
+		//TODO: change this to parallel
+		for _, cluster := range clusters {
+			if cluster.Value != "" {
+				v := cluster.Value
+				ip := strings.Split(strings.Split(v, "\"serverAddress\":\"")[1], "\"}]}")[0]
+				// get the list of nodes from the clusters
+				clusterConfig, err := clientcmd.BuildConfigFromFlags(ip, "")
+				if err == nil && clusterConfig != nil {
+					clientset := kubeclientset.NewForConfigOrDie(restclient.AddUserAgent(clusterConfig, userAgentName))
+					tmpNodeList, _ := clientset.Core().Nodes().List(api_v1.ListOptions{})
+					for i := range tmpNodeList.Items {
+						p := tmpNodeList.Items[i]
+						if p.Annotations == nil {
+							p.Annotations = make(map[string]string)
+						}
+						p.Annotations[ClusterNameAnnotation] = cluster.Key
+						vPtr.Set(reflect.Append(vPtr, reflect.ValueOf(p)))
+					}
 				}
 			}
 		}
+		return nil
 	}
-	return nil
-}
-
-func (s *nodeStore) listEtcdNode(ctx context.Context, key string) ([]*etcd.Node, uint64, error) {
-	if ctx == nil {
-		glog.Errorf("Context is nil")
-	}
-	opts := etcd.GetOptions{
-		Recursive: true,
-		Sort:      true,
-	}
-	result, err := s.etcdKeysAPI.Get(ctx, key, &opts)
-	if err != nil {
-		var index uint64
-		if etcdError, ok := err.(etcd.Error); ok {
-			index = etcdError.Index
-		}
-		nodes := make([]*etcd.Node, 0)
-		if etcdutil.IsEtcdNotFound(err) {
-			return nodes, index, nil
-		} else {
-			return nodes, index, toStorageErr(err, key, 0)
-		}
-	}
-	return result.Node.Nodes, result.Index, nil
 }
 
 // Watch implements storage.Interface.Watch.
