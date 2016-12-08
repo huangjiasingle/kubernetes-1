@@ -50,7 +50,7 @@ DNS_DOMAIN=${KUBE_DNS_NAME:-"cluster.local"}
 DNS_REPLICAS=${KUBE_DNS_REPLICAS:-1}
 KUBECTL=${KUBECTL:-cluster/kubectl.sh}
 WAIT_FOR_URL_API_SERVER=${WAIT_FOR_URL_API_SERVER:-10}
-ENABLE_DAEMON=${ENABLE_DAEMON:-true}
+ENABLE_DAEMON=${ENABLE_DAEMON:-false}
 HOSTNAME_OVERRIDE=${HOSTNAME_OVERRIDE:-"127.0.0.1"}
 CLOUD_PROVIDER=${CLOUD_PROVIDER:-""}
 CLOUD_CONFIG=${CLOUD_CONFIG:-""}
@@ -363,7 +363,7 @@ function start_apiserver {
     sudo mkdir -p "${CERT_DIR}"
 
 
-    APISERVER_LOG=/mnt/kube-apiserver.log
+    APISERVER_LOG=/tmp/kube-apiserver.log
     sudo -E "${GO_OUT}/hyperkube" apiserver ${anytoken_arg} ${authorizer_arg} ${priv_arg} ${runtime_config}\
       ${client_ca_file_arg} \
       ${advertise_address} \
@@ -419,7 +419,7 @@ function start_controller_manager {
       node_cidr_args="--allocate-node-cidrs=true --cluster-cidr=10.1.0.0/16 "
     fi
 
-    CTLRMGR_LOG=/mnt/kube-controller-manager.log
+    CTLRMGR_LOG=/tmp/kube-controller-manager.log
     sudo -E "${GO_OUT}/hyperkube" controller-manager \
       --v=${LOG_LEVEL} \
       --service-account-private-key-file="${SERVICE_ACCOUNT_KEY}" \
@@ -436,7 +436,7 @@ function start_controller_manager {
 }
 
 function start_kubelet {
-    KUBELET_LOG=/mnt/kubelet.log
+    KUBELET_LOG=/tmp/kubelet.log
 
     priv_arg=""
     if [[ -n "${ALLOW_PRIVILEGED}" ]]; then
@@ -552,7 +552,7 @@ function start_kubelet {
 }
 
 function start_kubeproxy {
-    PROXY_LOG=/mnt/kube-proxy.log
+    PROXY_LOG=/tmp/kube-proxy.log
     sudo -E "${GO_OUT}/hyperkube" proxy \
       --v=${LOG_LEVEL} \
       --hostname-override="${HOSTNAME_OVERRIDE}" \
@@ -561,7 +561,7 @@ function start_kubeproxy {
       --master="https://${API_HOST}:${API_SECURE_PORT}" >"${PROXY_LOG}" 2>&1 &
     PROXY_PID=$!
 
-    SCHEDULER_LOG=/mnt/kube-scheduler.log
+    SCHEDULER_LOG=/tmp/kube-scheduler.log
     sudo -E "${GO_OUT}/hyperkube" scheduler \
       --v=${LOG_LEVEL} \
       --kubeconfig "$CERT_DIR"/kubeconfig \

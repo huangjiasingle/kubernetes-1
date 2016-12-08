@@ -74,6 +74,10 @@ func addKnownTypes(scheme *runtime.Scheme) error {
 		&api.EventList{},
 		&api.ConfigMap{},
 		&api.ConfigMapList{},
+		&api.Node{},
+		&api.NodeList{},
+		&api.Pod{},
+		&api.PodList{},
 		&api.ResourceQuota{},
 		&api.ResourceQuotaList{},
 	)
