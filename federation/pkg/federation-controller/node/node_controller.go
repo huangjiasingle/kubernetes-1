@@ -22,18 +22,22 @@ import (
 	federation_api "k8s.io/kubernetes/federation/apis/federation/v1beta1"
 	federationclientset "k8s.io/kubernetes/federation/client/clientset_generated/federation_release_1_5"
 	"k8s.io/kubernetes/federation/pkg/federation-controller/util"
+	"k8s.io/kubernetes/federation/pkg/federation-controller/util/deletionhelper"
 	"k8s.io/kubernetes/federation/pkg/federation-controller/util/eventsink"
 	"k8s.io/kubernetes/pkg/api"
+	"k8s.io/kubernetes/pkg/api/errors"
 	api_v1 "k8s.io/kubernetes/pkg/api/v1"
 	"k8s.io/kubernetes/pkg/client/cache"
 	kubeclientset "k8s.io/kubernetes/pkg/client/clientset_generated/release_1_5"
 	"k8s.io/kubernetes/pkg/client/record"
 	"k8s.io/kubernetes/pkg/controller"
+	"k8s.io/kubernetes/pkg/conversion"
 	pkg_runtime "k8s.io/kubernetes/pkg/runtime"
 	"k8s.io/kubernetes/pkg/types"
 	"k8s.io/kubernetes/pkg/util/flowcontrol"
 	"k8s.io/kubernetes/pkg/watch"
 
+	"fmt"
 	"github.com/golang/glog"
 )
 
@@ -69,6 +73,8 @@ type NodeController struct {
 
 	// For events
 	eventRecorder record.EventRecorder
+
+	deletionHelper *deletionhelper.DeletionHelper
 
 	nodeReviewDelay       time.Duration
 	clusterAvailableDelay time.Duration
@@ -167,6 +173,22 @@ func NewNodeController(client federationclientset.Interface) *NodeController {
 			err := client.Core().Nodes().Delete(node.Name, &api_v1.DeleteOptions{})
 			return err
 		})
+
+	nodecontroller.deletionHelper = deletionhelper.NewDeletionHelper(
+		nodecontroller.hasFinalizerFunc,
+		nodecontroller.removeFinalizerFunc,
+		nodecontroller.addFinalizerFunc,
+		// objNameFunc
+		func(obj pkg_runtime.Object) string {
+			node := obj.(*api_v1.Node)
+			return node.Name
+		},
+		nodecontroller.updateTimeout,
+		nodecontroller.eventRecorder,
+		nodecontroller.nodeFederatedInformer,
+		nodecontroller.federatedUpdater,
+	)
+
 	return nodecontroller
 }
 
@@ -244,7 +266,7 @@ func (nodecontroller *NodeController) reconcileNode(node types.NodeName) {
 	}
 
 	key := string(node)
-	baseNodeObj, exist, err := nodecontroller.nodeInformerStore.GetByKey(key)
+	baseNodeObjFromStore, exist, err := nodecontroller.nodeInformerStore.GetByKey(key)
 	if err != nil {
 		glog.Errorf("Failed to query main node store for %v: %v", key, err)
 		nodecontroller.deliverNode(node, 0, true)
@@ -256,7 +278,39 @@ func (nodecontroller *NodeController) reconcileNode(node types.NodeName) {
 		glog.V(8).Infof("Skipping not federated node: %s", key)
 		return
 	}
-	baseNode := baseNodeObj.(*api_v1.Node)
+
+	// Create a copy before modifying the obj to prevent race condition with
+	// other readers of obj from store.
+	baseNodeObj, err := conversion.NewCloner().DeepCopy(baseNodeObjFromStore)
+	baseNode, ok := baseNodeObj.(*api_v1.Node)
+	if err != nil || !ok {
+		glog.Errorf("Error in retrieving obj from store: %v, %v", ok, err)
+		nodecontroller.deliverNode(node, 0, true)
+		return
+	}
+	if baseNode.DeletionTimestamp != nil {
+		if err := nodecontroller.delete(baseNode); err != nil {
+			glog.Errorf("Failed to delete %s: %v", node, err)
+			nodecontroller.eventRecorder.Eventf(baseNode, api.EventTypeNormal, "DeleteFailed",
+				"Node delete failed: %v", err)
+			nodecontroller.deliverNode(node, 0, true)
+		}
+		return
+	}
+
+	glog.V(3).Infof("Ensuring delete object from underlying clusters finalizer for node: %s",
+		baseNode.Name)
+	// Add the required finalizers before creating a node in underlying clusters.
+	updatedNodeObj, err := nodecontroller.deletionHelper.EnsureFinalizers(baseNode)
+	if err != nil {
+		glog.Errorf("Failed to ensure delete object from underlying clusters finalizer in node %s: %v",
+			baseNode.Name, err)
+		nodecontroller.deliverNode(node, 0, false)
+		return
+	}
+	baseNode = updatedNodeObj.(*api_v1.Node)
+
+	glog.V(3).Infof("Syncing node %s in underlying clusters", baseNode.Name)
 
 	clusters, err := nodecontroller.nodeFederatedInformer.GetReadyClusters()
 	if err != nil {
@@ -325,6 +379,74 @@ func (nodecontroller *NodeController) reconcileNode(node types.NodeName) {
 		nodecontroller.deliverNode(node, 0, true)
 		return
 	}
+}
+
+// Returns true if the given object has the given finalizer in its ObjectMeta.
+func (nodecontroller *NodeController) hasFinalizerFunc(obj pkg_runtime.Object, finalizer string) bool {
+	node := obj.(*api_v1.Node)
+	for i := range node.ObjectMeta.Finalizers {
+		if string(node.ObjectMeta.Finalizers[i]) == finalizer {
+			return true
+		}
+	}
+	return false
+}
+
+// Removes the finalizer from the given objects ObjectMeta.
+// Assumes that the given object is a node.
+func (nodecontroller *NodeController) removeFinalizerFunc(obj pkg_runtime.Object, finalizer string) (pkg_runtime.Object, error) {
+	node := obj.(*api_v1.Node)
+	newFinalizers := []string{}
+	hasFinalizer := false
+	for i := range node.ObjectMeta.Finalizers {
+		if string(node.ObjectMeta.Finalizers[i]) != finalizer {
+			newFinalizers = append(newFinalizers, node.ObjectMeta.Finalizers[i])
+		} else {
+			hasFinalizer = true
+		}
+	}
+	if !hasFinalizer {
+		// Nothing to do.
+		return obj, nil
+	}
+	node.ObjectMeta.Finalizers = newFinalizers
+	node, err := nodecontroller.federatedApiClient.Core().Nodes().Update(node)
+	if err != nil {
+		return nil, fmt.Errorf("failed to remove finalizer %s from node %s: %v", finalizer, node.Name, err)
+	}
+	return node, nil
+}
+
+// Adds the given finalizer to the given objects ObjectMeta.
+// Assumes that the given object is a node.
+func (nodecontroller *NodeController) addFinalizerFunc(obj pkg_runtime.Object, finalizer string) (pkg_runtime.Object, error) {
+	node := obj.(*api_v1.Node)
+	node.ObjectMeta.Finalizers = append(node.ObjectMeta.Finalizers, finalizer)
+	node, err := nodecontroller.federatedApiClient.Core().Nodes().Update(node)
+	if err != nil {
+		return nil, fmt.Errorf("failed to add finalizer %s to node %s: %v", finalizer, node.Name, err)
+	}
+	return node, nil
+}
+
+// delete deletes the given node or returns error if the deletion was not complete.
+func (nodecontroller *NodeController) delete(node *api_v1.Node) error {
+	glog.V(3).Infof("Handling deletion of node: %v", *node)
+	_, err := nodecontroller.deletionHelper.HandleObjectInUnderlyingClusters(node)
+	if err != nil {
+		return err
+	}
+
+	err = nodecontroller.federatedApiClient.Core().Nodes().Delete(node.Name, nil)
+	if err != nil {
+		// Its all good if the error is not found error. That means it is deleted already and we do not have to do anything.
+		// This is expected when we are processing an update as a result of node finalizer deletion.
+		// The process that deleted the last finalizer is also going to delete the node and we do not have to do anything.
+		if !errors.IsNotFound(err) {
+			return fmt.Errorf("failed to delete node: %v", err)
+		}
+	}
+	return nil
 }
 
 func parseTargetClusterName(node *api_v1.Node) string {
