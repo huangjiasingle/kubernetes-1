@@ -98,7 +98,7 @@ func (s *nodeStore) List(ctx context.Context, key, resourceVersion string, pred 
 			panic("need ptr to slice")
 		}
 		// get clusters from etcd
-		ClusterPrefix := "/registry/clusters"
+		ClusterPrefix := "/registry/clusters/"
 		clusters, _, _ := listEtcdNode(s.etcdKeysAPI, ctx, ClusterPrefix)
 
 		//TODO: change this to parallel

@@ -95,7 +95,7 @@ func (s *podStore) List(ctx context.Context, key, resourceVersion string, pred s
 		panic("need ptr to slice")
 	}
 	// get clusters from etcd
-	ClusterPrefix := "/registry/clusters"
+	ClusterPrefix := "/registry/clusters/"
 	clusters, _, _ := listEtcdNode(s.etcdKeysAPI, ctx, ClusterPrefix)
 
 	for _, node := range clusters {
