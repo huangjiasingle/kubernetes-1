@@ -122,15 +122,14 @@ func (dh *DeletionHelper) HandleObjectInUnderlyingClusters(obj runtime.Object) (
 	}
 	hasOrphanFinalizer := dh.hasFinalizerFunc(obj, api_v1.FinalizerOrphan)
 	if hasOrphanFinalizer {
-		glog.V(2).Infof("Found finalizer orphan. Nothing to do, just remove the finalizer")
-		// If the obj has FinalizerOrphan finalizer, then we need to orphan the
-		// corresponding objects in underlying clusters.
-		// Just remove both the finalizers in that case.
+		//TODO: when finalizer orphan is there, it means clients want to
+		//keep the children objects. We need to pass the same delete
+		//option to underlying clusters
+		glog.V(2).Infof("Found finalizer orphan. remove the finalizer")
 		obj, err := dh.removeFinalizerFunc(obj, api_v1.FinalizerOrphan)
 		if err != nil {
 			return obj, err
 		}
-		return dh.removeFinalizerFunc(obj, FinalizerDeleteFromUnderlyingClusters)
 	}
 
 	glog.V(2).Infof("Deleting obj %s from underlying clusters", objName)
