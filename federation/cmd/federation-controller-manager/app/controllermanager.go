@@ -40,6 +40,7 @@ import (
 	replicasetcontroller "k8s.io/kubernetes/federation/pkg/federation-controller/replicaset"
 	secretcontroller "k8s.io/kubernetes/federation/pkg/federation-controller/secret"
 	servicecontroller "k8s.io/kubernetes/federation/pkg/federation-controller/service"
+	resourcequotacontroller "k8s.io/kubernetes/federation/pkg/federation-controller/resourcequota"
 	"k8s.io/kubernetes/federation/pkg/federation-controller/util"
 	"k8s.io/kubernetes/pkg/client/restclient"
 	"k8s.io/kubernetes/pkg/client/unversioned/clientcmd"
@@ -194,6 +195,12 @@ func StartControllers(s *options.CMServer, restClientCfg *restclient.Config) err
 	nodeController := nodecontroller.NewNodeController(nodeClientset)
 	glog.Infof("Running node controller")
 	go nodeController.Run(wait.NeverStop)
+
+	glog.Infof("Loading client config for resource quota controller %q", "resource-quota-controller")
+	resourceQuotaClientset := federationclientset.NewForConfigOrDie(restclient.AddUserAgent(restClientCfg, "resource-quota-controller"))
+	resourceQuotaController := resourcequotacontroller.NewResourceQuotaController(resourceQuotaClientset)
+	glog.Infof("Running resource quota controller")
+	go resourceQuotaController.Run(wait.NeverStop)
 
 	glog.Infof("Loading client config for ingress controller %q", "ingress-controller")
 	ingClientset := federationclientset.NewForConfigOrDie(restclient.AddUserAgent(restClientCfg, "ingress-controller"))

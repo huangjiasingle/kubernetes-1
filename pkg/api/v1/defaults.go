@@ -48,6 +48,9 @@ func addDefaultingFuncs(scheme *runtime.Scheme) error {
 		SetDefaults_NamespaceStatus,
 		SetDefaults_Node,
 		SetDefaults_NodeStatus,
+		SetDefaults_ResourceQuota,
+		SetDefaults_ResourceQuotaStatus,
+		SetDefaults_ResourceQuotaList,
 		SetDefaults_ObjectFieldSelector,
 		SetDefaults_LimitRangeItem,
 		SetDefaults_ConfigMap,
@@ -282,6 +285,15 @@ func SetDefaults_NodeStatus(obj *NodeStatus) {
 		}
 		obj.Allocatable = obj.Capacity
 	}
+}
+// TODO: set real defaults for ResourceQuota
+func SetDefaults_ResourceQuota(obj *ResourceQuota) {
+}
+func SetDefaults_ResourceQuotaStatus(obj *ResourceQuotaStatus) {
+}
+func SetDefaults_ResourceQuotaSpec(obj *ResourceQuotaSpec) {
+}
+func SetDefaults_ResourceQuotaList(obj *ResourceQuotaList) {
 }
 func SetDefaults_ObjectFieldSelector(obj *ObjectFieldSelector) {
 	if obj.APIVersion == "" {

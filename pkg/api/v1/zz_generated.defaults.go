@@ -542,7 +542,9 @@ func SetObjectDefaults_ReplicationControllerList(in *ReplicationControllerList) 
 }
 
 func SetObjectDefaults_ResourceQuota(in *ResourceQuota) {
+	SetDefaults_ResourceQuota(in)
 	SetDefaults_ResourceList(&in.Spec.Hard)
+	SetDefaults_ResourceQuotaStatus(&in.Status)
 	SetDefaults_ResourceList(&in.Status.Hard)
 	SetDefaults_ResourceList(&in.Status.Used)
 }

@@ -39,9 +39,11 @@ func RegisterDeepCopies(scheme *runtime.Scheme) error {
 		conversion.GeneratedDeepCopyFunc{Fn: DeepCopy_federation_ClusterCondition, InType: reflect.TypeOf(&ClusterCondition{})},
 		conversion.GeneratedDeepCopyFunc{Fn: DeepCopy_federation_ClusterList, InType: reflect.TypeOf(&ClusterList{})},
 		conversion.GeneratedDeepCopyFunc{Fn: DeepCopy_federation_ClusterReplicaSetPreferences, InType: reflect.TypeOf(&ClusterReplicaSetPreferences{})},
+		conversion.GeneratedDeepCopyFunc{Fn: DeepCopy_federation_ClusterResourceQuotaPreferences, InType: reflect.TypeOf(&ClusterResourceQuotaPreferences{})},
 		conversion.GeneratedDeepCopyFunc{Fn: DeepCopy_federation_ClusterSpec, InType: reflect.TypeOf(&ClusterSpec{})},
 		conversion.GeneratedDeepCopyFunc{Fn: DeepCopy_federation_ClusterStatus, InType: reflect.TypeOf(&ClusterStatus{})},
 		conversion.GeneratedDeepCopyFunc{Fn: DeepCopy_federation_FederatedReplicaSetPreferences, InType: reflect.TypeOf(&FederatedReplicaSetPreferences{})},
+		conversion.GeneratedDeepCopyFunc{Fn: DeepCopy_federation_FederatedResourceQuotaPreferences, InType: reflect.TypeOf(&FederatedResourceQuotaPreferences{})},
 		conversion.GeneratedDeepCopyFunc{Fn: DeepCopy_federation_ServerAddressByClientCIDR, InType: reflect.TypeOf(&ServerAddressByClientCIDR{})},
 	)
 }
@@ -116,6 +118,15 @@ func DeepCopy_federation_ClusterReplicaSetPreferences(in interface{}, out interf
 	}
 }
 
+func DeepCopy_federation_ClusterResourceQuotaPreferences(in interface{}, out interface{}, c *conversion.Cloner) error {
+	{
+		in := in.(*ClusterResourceQuotaPreferences)
+		out := out.(*ClusterResourceQuotaPreferences)
+		out.Weight = in.Weight
+		return nil
+	}
+}
+
 func DeepCopy_federation_ClusterSpec(in interface{}, out interface{}, c *conversion.Cloner) error {
 	{
 		in := in.(*ClusterSpec)
@@ -181,6 +192,24 @@ func DeepCopy_federation_FederatedReplicaSetPreferences(in interface{}, out inte
 					return err
 				}
 				(*out)[key] = *newVal
+			}
+		} else {
+			out.Clusters = nil
+		}
+		return nil
+	}
+}
+
+func DeepCopy_federation_FederatedResourceQuotaPreferences(in interface{}, out interface{}, c *conversion.Cloner) error {
+	{
+		in := in.(*FederatedResourceQuotaPreferences)
+		out := out.(*FederatedResourceQuotaPreferences)
+		out.Rebalance = in.Rebalance
+		if in.Clusters != nil {
+			in, out := &in.Clusters, &out.Clusters
+			*out = make(map[string]ClusterResourceQuotaPreferences)
+			for key, val := range *in {
+				(*out)[key] = val
 			}
 		} else {
 			out.Clusters = nil

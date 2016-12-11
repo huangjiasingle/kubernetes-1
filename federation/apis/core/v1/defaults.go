@@ -29,5 +29,8 @@ func addDefaultingFuncs(scheme *runtime.Scheme) error {
 		v1.SetDefaults_NamespaceStatus,
 		v1.SetDefaults_Pod,
 		v1.SetDefaults_Node,
+		v1.SetDefaults_ResourceQuota,
+		v1.SetDefaults_ResourceQuotaSpec,
+		v1.SetDefaults_ResourceQuotaStatus,
 	)
 }

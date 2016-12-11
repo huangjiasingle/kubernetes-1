@@ -153,3 +153,28 @@ type ClusterReplicaSetPreferences struct {
 	// A number expressing the preference to put an additional replica to this LocalReplicaSet. 0 by default.
 	Weight int64
 }
+
+// Temporary/alpha structures to support custom resource quota assignments within FederatedResourceQuota.
+
+// A set of preferences that can be added to federated version of ResourceQuota as a json-serialized annotation.
+// The preferences allow the user to express in which clusters he wants to put his resource quota within the
+// mentiond FederatedResourceQuota.
+type FederatedResourceQuotaPreferences struct {
+	// If set to true then already scheduled and running replicas may be moved to other clusters to
+	// in order to bring cluster replicasets towards a desired state. Otherwise, if set to false,
+	// up and running replicas will not be moved.
+	// +optional
+	Rebalance bool `json:"rebalance,omitempty"`
+
+	// A mapping between cluster names and preferences regarding local ResourceQuota in these clusters.
+	// "*" (if provided) applies to all clusters if an explicit mapping is not provided. If there is no
+	// "*" that clusters without explicit preferences should not have any replicas scheduled.
+	// +optional
+	Clusters map[string]ClusterResourceQuotaPreferences `json:"clusters,omitempty"`
+}
+
+// Preferences regarding number of replicas assigned to a cluster replicaset within a federated replicaset.
+type ClusterResourceQuotaPreferences struct {
+	// A number expressing the preference to put an additional cluster to this local ResourceQuota. 1 by default.
+	Weight int64
+}
