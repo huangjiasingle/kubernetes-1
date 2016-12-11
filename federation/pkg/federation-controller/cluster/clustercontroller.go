@@ -194,12 +194,22 @@ func (cc *ClusterController) UpdateClusterStatus() error {
 
 		zones, region, err := clusterClient.GetClusterZones()
 		if err != nil {
-			glog.Warningf("Failed to get zones and region for cluster %s: %v", cluster.Name, err)
+			glog.Warningf("Failed to get zones and region for cluster %s: %v. Use default values for zones and region",
+				cluster.Name, err)
 			// Don't return err here, as we want the rest of the status update to proceed.
-		} else {
-			clusterStatusNew.Zones = zones
-			clusterStatusNew.Region = region
 		}
+
+		if len(zones) == 0 {
+			zones = append(zones, "DefaultZone"+cluster.Name)
+		}
+
+		if region == "" {
+			region = "DefaultRegion" + cluster.Name
+		}
+
+		clusterStatusNew.Zones = zones
+		clusterStatusNew.Region = region
+
 		cc.clusterClusterStatusMap[cluster.Name] = *clusterStatusNew
 		cluster.Status = *clusterStatusNew
 		cluster, err := cc.federationClient.Federation().Clusters().UpdateStatus(&cluster)
