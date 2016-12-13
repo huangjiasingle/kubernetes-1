@@ -390,9 +390,9 @@ func (resourcequotacontroller *ResourceQuotaController) reconcileResourceQuota(n
 		resourcequotacontroller.deliverResourceQuota(namespace, resourcequotaName, resourcequotacontroller.smallDelay, true)
 		return
 	}
-	updatedResourceQuota := updatedResourceQuotaObj.(*api_v1.ResourceQuota)
+	baseResourceQuota = updatedResourceQuotaObj.(*api_v1.ResourceQuota)
 
-	glog.V(3).Infof("Syncing resource quota %s in underlying clusters", updatedResourceQuota.Name)
+	glog.V(3).Infof("Syncing resource quota %s in underlying clusters", baseResourceQuota.Name)
 
 	clusters, err := resourcequotacontroller.resourceQuotaFederatedInformer.GetReadyClusters()
 	if err != nil {
@@ -401,6 +401,7 @@ func (resourcequotacontroller *ResourceQuotaController) reconcileResourceQuota(n
 		return
 	}
 
+	needUpdateStatus := false
 	operations := make([]util.FederatedOperation, 0)
 	for _, cluster := range clusters {
 
@@ -412,13 +413,13 @@ func (resourcequotacontroller *ResourceQuotaController) reconcileResourceQuota(n
 		}
 
 		desiredResourceQuota := &api_v1.ResourceQuota{
-			ObjectMeta: util.DeepCopyRelevantObjectMeta(updatedResourceQuota.ObjectMeta),
-			Spec:       updatedResourceQuota.Spec,
-			Status:     updatedResourceQuota.Status,
+			ObjectMeta: util.DeepCopyRelevantObjectMeta(baseResourceQuota.ObjectMeta),
+			Spec:       baseResourceQuota.Spec,
+			Status:     baseResourceQuota.Status,
 		}
 
 		if !found {
-			resourcequotacontroller.eventRecorder.Eventf(updatedResourceQuota, api.EventTypeNormal, "CreateInCluster",
+			resourcequotacontroller.eventRecorder.Eventf(baseResourceQuota, api.EventTypeNormal, "CreateInCluster",
 				"Creating resourcequota in cluster %s", cluster.Name)
 
 			operations = append(operations, util.FederatedOperation{
@@ -432,27 +433,34 @@ func (resourcequotacontroller *ResourceQuotaController) reconcileResourceQuota(n
 			// Update existing resourcequota, if needed.
 			// TODO: Current logic only support pass through, need split CPU/Memory values in future
 			if !util.ObjectMetaEquivalent(desiredResourceQuota.ObjectMeta, clusterResourceQuota.ObjectMeta) ||
-				!reflect.DeepEqual(desiredResourceQuota.Spec, clusterResourceQuota.Spec) ||
-				!reflect.DeepEqual(desiredResourceQuota.Status.Hard, clusterResourceQuota.Status.Hard) {
+				!reflect.DeepEqual(desiredResourceQuota.Spec, clusterResourceQuota.Spec) {
 
-				resourcequotacontroller.eventRecorder.Eventf(updatedResourceQuota, api.EventTypeNormal, "UpdateInCluster",
+				resourcequotacontroller.eventRecorder.Eventf(baseResourceQuota, api.EventTypeNormal, "UpdateInCluster",
 					"Updating resourcequota in cluster %s", cluster.Name)
 				operations = append(operations, util.FederatedOperation{
 					Type:        util.OperationTypeUpdate,
 					Obj:         desiredResourceQuota,
 					ClusterName: cluster.Name,
 				})
+			} else {
+				if !reflect.DeepEqual(desiredResourceQuota.Status, clusterResourceQuota.Status) {
+					// TODO: Summarizing Status values for the fields being split
+					resourcequotacontroller.resourceQuotaStatusMap[key] = clusterResourceQuota.Status
+					needUpdateStatus = true;
+				}
 			}
-			// TODO: Summarizing Status values for the fields being split
-			resourcequotacontroller.resourceQuotaStatusMap[key] = clusterResourceQuota.Status
 		}
 	}
 
-	baseResourceQuota.Status = resourcequotacontroller.resourceQuotaStatusMap[key]
-	baseResourceQuota, err = resourcequotacontroller.federatedApiClient.Core().ResourceQuotas(namespace).Update(baseResourceQuota)
-	if err != nil {
-		glog.Errorf("failed to update resource quota status %s: %v", resourcequotaName, err)
-		return
+	if needUpdateStatus {
+		// TODO: Update Status values for the fields being summarized
+		//baseResourceQuota.Status = resourcequotacontroller.resourceQuotaStatusMap[key]
+		//_, err = resourcequotacontroller.federatedApiClient.Core().ResourceQuotas(baseResourceQuota.Namespace).UpdateStatus(baseResourceQuota)
+
+		if err != nil {
+			glog.Errorf("failed to update resource quota status %s: %v", resourcequotaName, err)
+			return
+		}
 	}
 
 	if len(operations) == 0 {
@@ -461,7 +469,7 @@ func (resourcequotacontroller *ResourceQuotaController) reconcileResourceQuota(n
 	}
 	err = resourcequotacontroller.federatedUpdater.UpdateWithOnError(operations, resourcequotacontroller.updateTimeout,
 		func(op util.FederatedOperation, operror error) {
-			resourcequotacontroller.eventRecorder.Eventf(updatedResourceQuota, api.EventTypeNormal, "UpdateInClusterFailed",
+			resourcequotacontroller.eventRecorder.Eventf(baseResourceQuota, api.EventTypeNormal, "UpdateInClusterFailed",
 				"ResourceQuota update in cluster %s failed: %v", op.ClusterName, operror)
 		})
 
