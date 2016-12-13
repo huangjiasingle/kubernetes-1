@@ -47,10 +47,8 @@ import (
 	"k8s.io/kubernetes/pkg/util/wait"
 	"k8s.io/kubernetes/pkg/util/workqueue"
 	"k8s.io/kubernetes/pkg/watch"
-	//"k8s.io/kubernetes/pkg/api/resource"
 
 	"sync"
-	"k8s.io/kubernetes/pkg/fields"
 )
 
 const (
@@ -114,8 +112,8 @@ type ReplicaSetController struct {
 }
 
 // NewclusterController returns a new cluster controller
-func NewReplicaSetController(federationClient fedclientset.Interface,refreshDuration time.Duration,
-				enableMetricBasedScheduler bool) *ReplicaSetController {
+func NewReplicaSetController(federationClient fedclientset.Interface, refreshDuration time.Duration,
+	enableMetricBasedScheduler bool) *ReplicaSetController {
 	broadcaster := record.NewBroadcaster()
 	broadcaster.StartRecordingToSink(eventsink.NewFederatedEventSink(federationClient))
 	recorder := broadcaster.NewRecorder(api.EventSource{Component: "federated-replicaset-controller"})
@@ -131,9 +129,9 @@ func NewReplicaSetController(federationClient fedclientset.Interface,refreshDura
 				"*": {Weight: 1},
 			},
 		}),
-		eventRecorder: recorder,
-		enableResourceMetricBasedScheduling:enableMetricBasedScheduler,
-		clusterResourceRefreshPeriod:refreshDuration,
+		eventRecorder:                       recorder,
+		enableResourceMetricBasedScheduling: enableMetricBasedScheduler,
+		clusterResourceRefreshPeriod:        refreshDuration,
 	}
 
 	replicaSetFedInformerFactory := func(cluster *fedv1.Cluster, clientset kubeclientset.Interface) (cache.Store, cache.ControllerInterface) {
@@ -326,17 +324,17 @@ func (frsc *ReplicaSetController) Run(workers int, stopCh <-chan struct{}) {
 
 type ClusterResourceRequest struct {
 	clusterName string
-	wg *sync.WaitGroup
-	res []ClusterNodesResources
-	required *ClusterNodesResources
-	respChan chan ClusterResourceResponse
+	wg          *sync.WaitGroup
+	res         []ClusterNodesResources
+	required    *ClusterNodesResources
+	respChan    chan ClusterResourceResponse
 }
 type ClusterResourceResponse struct {
 	clusterName string
-	weight int64
+	weight      int64
 }
 type ClusterNodesResources struct {
-	nodeName string
+	nodeName  string
 	milliCpu  int64
 	mem       int64
 	numOfPods int64
@@ -345,15 +343,15 @@ type ClusterNodesResources struct {
 
 type ClusterResponse struct {
 	clusterName string
-	res []ClusterNodesResources
-	err error
+	res         []ClusterNodesResources
+	err         error
 }
 
 type ClusterRequest struct {
 	clusterName string
-	frscLocal *ReplicaSetController
-	wg *sync.WaitGroup
-	respChan chan ClusterResponse
+	frscLocal   *ReplicaSetController
+	wg          *sync.WaitGroup
+	respChan    chan ClusterResponse
 }
 
 type MetricSchedulerData struct {
@@ -361,9 +359,23 @@ type MetricSchedulerData struct {
 	clustersResources map[string][]ClusterNodesResources
 }
 
-func (frsc *ReplicaSetController) updateClusterResources(){
+func createpodsMapOfNodeName(podsInclust *apiv1.PodList) map[string][]*apiv1.Pod {
+	podsNodeName := make(map[string][]*apiv1.Pod)
 
-	clusters ,err := frsc.fedPodInformer.GetReadyClusters()
+	for _, pod := range podsInclust.Items {
+		nodeName := pod.Spec.NodeName
+		if _, ok := podsNodeName[nodeName]; !ok {
+			podsNodeName[nodeName] = make([]*apiv1.Pod, 0, 1)
+			podsNodeName[nodeName] = append(podsNodeName[nodeName], &pod)
+		} else {
+			podsNodeName[nodeName] = append(podsNodeName[nodeName], &pod)
+		}
+	}
+	return podsNodeName
+}
+func (frsc *ReplicaSetController) updateClusterResources() {
+
+	clusters, err := frsc.fedPodInformer.GetReadyClusters()
 	if err != nil {
 		glog.Errorf("Failed GetReadyClusters in updateClusterResources: %v", err)
 		return
@@ -372,11 +384,11 @@ func (frsc *ReplicaSetController) updateClusterResources(){
 	var numResp int
 	numReq = len(clusters)
 
-	respChan := make (chan ClusterResponse,numReq)
+	respChan := make(chan ClusterResponse, numReq)
 	var wg sync.WaitGroup
 
 	//wg.Add(numReq)
-	for _,cluster:= range clusters {
+	for _, cluster := range clusters {
 		wg.Add(1)
 		var req ClusterRequest
 		req.clusterName = cluster.Name
@@ -390,99 +402,98 @@ func (frsc *ReplicaSetController) updateClusterResources(){
 			defer request.wg.Done()
 			client, err := request.frscLocal.fedPodInformer.GetClientsetForCluster(clusterName)
 			if err != nil {
-				glog.Errorf("Failed GetClientsetForCluster in updateClusterResources: %v for cluster %s", err,clusterName)
-				request.respChan <- ClusterResponse{clusterName,nil,err}
+				glog.Errorf("Failed GetClientsetForCluster in updateClusterResources: %v for cluster %s", err, clusterName)
+				request.respChan <- ClusterResponse{clusterName, nil, err}
 				return
 			}
-
+			//get all the nodes in a cluster
 			nodeList, err := client.CoreV1().Nodes().List(apiv1.ListOptions{})
 			if err != nil {
-				glog.Errorf("Failed to get the Nodes List in updateClusterResources: %v for cluster %s", err,clusterName)
-				request.respChan <- ClusterResponse{clusterName,nil,err}
+				glog.Errorf("Failed to get the Nodes List in updateClusterResources: %v for cluster %s", err, clusterName)
+				request.respChan <- ClusterResponse{clusterName, nil, err}
 				return
 			}
-			glog.V(2).Infof("Num of Nodes %d in a cluster %s",len(nodeList.Items),clusterName)
-			clustRes := make([]ClusterNodesResources,0,len(nodeList.Items))
+			glog.V(2).Infof("Num of Nodes %d in a cluster %s", len(nodeList.Items), clusterName)
+			//get all the deployed pods in a cluster
+			podCustList, err := client.Core().Pods(apiv1.NamespaceAll).List(apiv1.ListOptions{})
+			if err != nil {
+				glog.Errorf("Failed to get all Pods deployed in a cluster in updateClusterResources: %v for cluster %s", err, clusterName)
+				request.respChan <- ClusterResponse{clusterName, nil, err}
+				return
+			}
+			glog.V(2).Infof("Num of pods %d deployed in a cluster %s", len(podCustList.Items), clusterName)
+
+			podsMap := createpodsMapOfNodeName(podCustList)
+			clustRes := make([]ClusterNodesResources, 0, len(nodeList.Items))
 			for i, _ := range nodeList.Items {
 				var res api.ResourceList
-				var str string
+				nodeName := nodeList.Items[i].Name
+
 				err = apiv1.Convert_v1_ResourceList_To_api_ResourceList(&(nodeList.Items[i].Status.Allocatable), &res, nil)
 				if err != nil {
-					glog.Errorf("Failed to Convert_v1_ResourceList_To_api_ResourceList in updateClusterResources: %v for cluster %s", err,clusterName)
-					request.respChan <- ClusterResponse{clusterName,nil,err}
+					glog.Errorf("Failed to Convert_v1_ResourceList_To_api_ResourceList in updateClusterResources: %v for cluster %s", err, clusterName)
+					request.respChan <- ClusterResponse{clusterName, nil, err}
 					return
 				}
-				selector := fields.OneTermEqualSelector(api.PodHostField,nodeList.Items[i].Name)
-				err = api.Convert_fields_Selector_To_string(&selector,&str,nil)
-				if err != nil {
-					glog.Errorf("Failed to Convert_fields_Selector_To_string in updateClusterResources: %v for cluster %s", err,clusterName)
-					request.respChan <- ClusterResponse{clusterName,nil,err}
-					return
-				}
-				podList,err := client.Core().Pods(apiv1.NamespaceAll).List(apiv1.ListOptions{FieldSelector:str})
-				if err != nil {
-					glog.Errorf("Failed to get all Pods deployed in a Node in updateClusterResources: %v for cluster %s", err,clusterName)
-					request.respChan <- ClusterResponse{clusterName,nil,err}
-					return
-				}
-				glog.V(2).Infof("Num of pods %d in a Node %s in cluster %s",len(podList.Items),nodeList.Items[i].Name,clusterName)
 
-				var nodeUsedRes  ClusterNodesResources
+				var nodeUsedRes ClusterNodesResources
 				var nodeAvailRes ClusterNodesResources
 
-				nodeUsedRes.nodeName = nodeList.Items[i].Name
-				nodeAvailRes = ClusterNodesResources{nodeList.Items[i].Name,res.Cpu().MilliValue(),
-						res.Memory().Value(),res.Pods().Value(),res.NvidiaGPU().Value()}
+				nodeUsedRes.nodeName = nodeName
+				nodeAvailRes = ClusterNodesResources{nodeName, res.Cpu().MilliValue(),
+					res.Memory().Value(), res.Pods().Value(), res.NvidiaGPU().Value()}
 
-				for _,pod := range podList.Items {
+				podsInNode, _ := podsMap[nodeName]
+				glog.V(2).Infof("Num of pods %d in a Node %s in cluster %s", len(podsInNode), nodeName, clusterName)
+				for _, pod := range podsInNode {
 					podRes := GetRequiredResourceInfo(pod.Spec)
 					nodeUsedRes.milliCpu += podRes.milliCpu
 					nodeUsedRes.mem += podRes.mem
 					nodeUsedRes.numOfPods += podRes.numOfPods
 					nodeUsedRes.nvidiaGPU += podRes.nvidiaGPU
 				}
-				glog.V(2).Infof("Used resources %v in a Node %s in cluster:%s",nodeUsedRes,nodeList.Items[i].Name,clusterName)
+				glog.V(2).Infof("Used resources %v in a Node %s in cluster:%s", nodeUsedRes, nodeName, clusterName)
 
-				if ( (nodeAvailRes.milliCpu - nodeUsedRes.milliCpu) < 0  ){
+				if (nodeAvailRes.milliCpu - nodeUsedRes.milliCpu) < 0 {
 					nodeAvailRes.milliCpu = 0
-				}else {
+				} else {
 					nodeAvailRes.milliCpu -= nodeUsedRes.milliCpu
 				}
 
-				if ( (nodeAvailRes.mem - nodeUsedRes.mem) < 0  ){
+				if (nodeAvailRes.mem - nodeUsedRes.mem) < 0 {
 					nodeAvailRes.mem = 0
-				}else {
+				} else {
 					nodeAvailRes.mem -= nodeUsedRes.mem
 				}
 
-				if ( (nodeAvailRes.numOfPods - nodeUsedRes.numOfPods) < 0  ){
+				if (nodeAvailRes.numOfPods - nodeUsedRes.numOfPods) < 0 {
 					nodeAvailRes.numOfPods = 0
-				}else {
+				} else {
 					nodeAvailRes.numOfPods -= nodeUsedRes.numOfPods
 				}
 
-				if ( (nodeAvailRes.nvidiaGPU - nodeUsedRes.nvidiaGPU) < 0  ){
+				if (nodeAvailRes.nvidiaGPU - nodeUsedRes.nvidiaGPU) < 0 {
 					nodeAvailRes.nvidiaGPU = 0
-				}else {
+				} else {
 					nodeAvailRes.nvidiaGPU -= nodeUsedRes.nvidiaGPU
 				}
 
-				clustRes = append(clustRes,nodeAvailRes)
+				clustRes = append(clustRes, nodeAvailRes)
 			}
-			request.respChan <- ClusterResponse{clusterName,clustRes,err}
+			request.respChan <- ClusterResponse{clusterName, clustRes, err}
 		}(req)
 
 	}
 	//wait till all the resources received from all the clusters
 	wg.Wait()
 
-	clustersRes := make( map[string][]ClusterNodesResources)
-	for i:=0 ;i<numReq ; i++ {
+	clustersRes := make(map[string][]ClusterNodesResources)
+	for i := 0; i < numReq; i++ {
 		numResp++
 		resp := <-respChan
 
 		if resp.err != nil {
-			glog.Errorf("Failed to get the Nodes List in updateClusterResources: %v for cluster %s", err,resp.clusterName)
+			glog.Errorf("Failed to get the Nodes List in updateClusterResources: %v for cluster %s", err, resp.clusterName)
 		} else {
 			clustersRes[resp.clusterName] = resp.res
 		}
@@ -494,7 +505,7 @@ func (frsc *ReplicaSetController) updateClusterResources(){
 
 	//store the cluster resources global schedData
 	frsc.schedData.Lock()
-	frsc.schedData.clustersResources =clustersRes
+	frsc.schedData.clustersResources = clustersRes
 	frsc.schedData.Unlock()
 
 }
@@ -541,7 +552,7 @@ func GetRequiredResourceInfo(podSpec apiv1.PodSpec) *ClusterNodesResources {
 			}
 		}
 	}
-	glog.V(2).Infof("In GetRequiredResourceInfo Replica required resources %v",result)
+	glog.V(2).Infof("In GetRequiredResourceInfo Replica required resources %v", result)
 	return &result
 }
 
@@ -551,48 +562,48 @@ func minInt64(a int64, b int64) int64 {
 	}
 	return b
 }
-func gcdForTwoNums(x,y int64) int64 {
+func gcdForTwoNums(x, y int64) int64 {
 	var t int64
-	if (x < y) {
+	if x < y {
 		t = x
 		x = y
 		y = t
 	}
 
-	for ; y!= 0 ; {
-		t = x%y
+	for y != 0 {
+		t = x % y
 		x = y
 		y = t
 	}
 	return x
 }
-func gcdVal_FromASlice(s[] int64) int64 {
+func gcdVal_FromASlice(s []int64) int64 {
 	n := len(s)
-	if n ==1 {
+	if n == 1 {
 		return s[0]
 	}
 	first := s[0]
-	for i:=1;i<n ; i++ {
-		first = gcdForTwoNums(first,s[i])
+	for i := 1; i < n; i++ {
+		first = gcdForTwoNums(first, s[i])
 	}
 	return first
 }
-//http://kubernetes.io/docs/user-guide/compute-resources/
-var defaultMilliCpu int64 = 100    //
-var defaultmemory   int64 = 1000   //1000 bytes
 
-func (frsc *ReplicaSetController)calculatePrefBasedOnResources(podSpec apiv1.PodSpec)map[string]fed.ClusterReplicaSetPreferences {
+//http://kubernetes.io/docs/user-guide/compute-resources/
+var defaultMilliCpu int64 = 100 //
+var defaultmemory int64 = 1000  //1000 bytes
+
+func (frsc *ReplicaSetController) calculatePrefBasedOnResources(podSpec apiv1.PodSpec) map[string]fed.ClusterReplicaSetPreferences {
 
 	required := GetRequiredResourceInfo(podSpec)
 
-	if required.milliCpu == 0  {
+	if required.milliCpu == 0 {
 		required.milliCpu = defaultMilliCpu
 	}
 
-	if  required.mem == 0 {
+	if required.mem == 0 {
 		required.mem = defaultmemory
 	}
-
 
 	frsc.schedData.Lock()
 	resources := frsc.schedData.clustersResources
@@ -602,10 +613,10 @@ func (frsc *ReplicaSetController)calculatePrefBasedOnResources(podSpec apiv1.Pod
 	var numResp int
 	numReq = len(resources)
 
-	respChan := make (chan ClusterResourceResponse,numReq)
+	respChan := make(chan ClusterResourceResponse, numReq)
 	var wg sync.WaitGroup
 
-	for name,resource:= range resources {
+	for name, resource := range resources {
 		wg.Add(1)
 		var req ClusterResourceRequest
 		req.clusterName = name
@@ -615,14 +626,14 @@ func (frsc *ReplicaSetController)calculatePrefBasedOnResources(podSpec apiv1.Pod
 		req.respChan = respChan
 
 		go func(request ClusterResourceRequest) {
-			var  weight int64
+			var weight int64
 			defer request.wg.Done()
 			// num of maximum pods can be deployable on each node and each cluster
-			for _,resource := range request.res{
-				weight += minInt64(resource.milliCpu/request.required.milliCpu,resource.mem/request.required.mem)
+			for _, resource := range request.res {
+				weight += minInt64(resource.milliCpu/request.required.milliCpu, resource.mem/request.required.mem)
 			}
 
-			request.respChan<-ClusterResourceResponse{request.clusterName,weight}
+			request.respChan <- ClusterResourceResponse{request.clusterName, weight}
 
 		}(req)
 
@@ -631,12 +642,12 @@ func (frsc *ReplicaSetController)calculatePrefBasedOnResources(podSpec apiv1.Pod
 	wg.Wait()
 
 	clustPref := make(map[string]fed.ClusterReplicaSetPreferences)
-	clustWeights := make([]int64,0,numReq)
-	for i:=0 ;i<numReq ; i++ {
+	clustWeights := make([]int64, 0, numReq)
+	for i := 0; i < numReq; i++ {
 		numResp++
 		resp := <-respChan
-		clustPref[resp.clusterName]= fed.ClusterReplicaSetPreferences{Weight:resp.weight}
-		clustWeights = append(clustWeights,resp.weight)
+		clustPref[resp.clusterName] = fed.ClusterReplicaSetPreferences{Weight: resp.weight}
+		clustWeights = append(clustWeights, resp.weight)
 		// once all the responses are read close the channel
 		if numResp == numReq {
 			close(respChan)
@@ -646,8 +657,8 @@ func (frsc *ReplicaSetController)calculatePrefBasedOnResources(podSpec apiv1.Pod
 	gcdV := gcdVal_FromASlice(clustWeights)
 
 	if (gcdV != 0) && (gcdV != 1) {
-		for key,val := range clustPref {
-			val.Weight = val.Weight/gcdV
+		for key, val := range clustPref {
+			val.Weight = val.Weight / gcdV
 			clustPref[key] = val
 		}
 	}
@@ -772,8 +783,8 @@ func (frsc *ReplicaSetController) schedule(frs *extensionsv1.ReplicaSet, cluster
 		plnr = planner.NewPlanner(frsPref)
 	} else if frsc.enableResourceMetricBasedScheduling {
 		clustPref := frsc.calculatePrefBasedOnResources(frs.Spec.Template.Spec)
-		glog.V(2).Infof("Cluster preferences based on scheduler %v",clustPref)
-		plnr = planner.NewPlanner(&fed.FederatedReplicaSetPreferences{Clusters:clustPref})
+		glog.V(2).Infof("Cluster preferences based on scheduler %v", clustPref)
+		plnr = planner.NewPlanner(&fed.FederatedReplicaSetPreferences{Clusters: clustPref})
 	}
 
 	replicas := int64(*frs.Spec.Replicas)
